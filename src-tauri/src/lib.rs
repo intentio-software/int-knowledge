@@ -240,6 +240,81 @@ fn delete_note(state: tauri::State<'_, AppState>, root: String, path: String) ->
     Ok(deleted)
 }
 
+/// Create an empty folder.
+///
+/// Folders are otherwise implied by the notes inside them, so a new one would
+/// vanish on the next refresh if it did not exist on disk.
+#[tauri::command]
+fn create_folder(state: tauri::State<'_, AppState>, root: String, path: String) -> Result<String, String> {
+    let vault = open(&root)?;
+    let created = vault.create_folder(&path).map_err(|err| err.to_string())?;
+    state.invalidate(&root);
+    Ok(created)
+}
+
+/// Move or rename a folder, keeping wikilinks to the notes inside it working.
+///
+/// The notes keep their filenames, so most links — which are written as bare
+/// names — need no change at all; the rewrite catches the ones written as full
+/// paths, and any that become ambiguous at the new location.
+#[tauri::command]
+fn move_folder(
+    state: tauri::State<'_, AppState>,
+    root: String,
+    from: String,
+    to: String,
+    update_links: Option<bool>,
+) -> Result<String, String> {
+    let vault = open(&root)?;
+    let from_path = vault.normalize(&from).map_err(|err| err.to_string())?;
+    let to_path = vault.normalize(&to).map_err(|err| err.to_string())?;
+
+    // Worked out before the move, while the old paths still resolve.
+    let moves: Vec<(String, String)> = if update_links.unwrap_or(true) {
+        vault
+            .notes_under(&from_path)
+            .map_err(|err| err.to_string())?
+            .into_iter()
+            .map(|note| {
+                let moved = format!("{to_path}{}", &note[from_path.len()..]);
+                (note, moved)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let rewrites = if moves.is_empty() {
+        Vec::new()
+    } else {
+        state.with_index(&root, |_, index| index.rewrite_links_for_moves(&moves))?
+    };
+
+    let (_, moved_to) = vault.move_folder(&from_path, &to_path).map_err(|err| err.to_string())?;
+    for (path, content) in rewrites {
+        if let Err(err) = vault.write_note(&path, &content) {
+            eprintln!("[knowledge] link rewrite failed for {path}: {err}");
+        }
+    }
+    state.invalidate(&root);
+    Ok(moved_to)
+}
+
+/// Delete a folder and every note inside it.
+#[tauri::command]
+fn delete_folder(state: tauri::State<'_, AppState>, root: String, path: String) -> Result<String, String> {
+    let vault = open(&root)?;
+    let deleted = vault.delete_folder(&path).map_err(|err| err.to_string())?;
+    state.invalidate(&root);
+    Ok(deleted)
+}
+
+/// Paths of the notes inside a folder, so the UI can say what a delete removes.
+#[tauri::command]
+fn notes_in_folder(root: String, path: String) -> Result<Vec<String>, String> {
+    let vault = open(&root)?;
+    vault.notes_under(&path).map_err(|err| err.to_string())
+}
+
 /// Rename or move a note, keeping wikilinks elsewhere in the vault pointing at it.
 #[tauri::command]
 fn rename_note(
@@ -570,6 +645,10 @@ pub fn run() {
             save_note,
             create_note,
             delete_note,
+            create_folder,
+            move_folder,
+            delete_folder,
+            notes_in_folder,
             rename_note,
             search_notes,
             resolve_link,

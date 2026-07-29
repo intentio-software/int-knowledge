@@ -281,14 +281,7 @@ impl VaultIndex {
     /// the caller decides when to write. Only links that actually resolved to
     /// `from` are touched.
     pub fn rewrite_links_for_move(&self, from: &str, to: &str) -> Vec<(String, String)> {
-        let new_stem = strip_note_ext(to.rsplit('/').next().unwrap_or(to)).to_string();
-        // Use the bare name when it is unambiguous, otherwise the full path.
-        let ambiguous = self
-            .by_key
-            .get(&new_stem.to_lowercase())
-            .map(|hits| hits.len() > 1)
-            .unwrap_or(false);
-        let replacement = if ambiguous { strip_note_ext(to).to_string() } else { new_stem };
+        let replacement = self.replacement_for(to);
 
         let mut changed = Vec::new();
         for note in &self.notes {
@@ -322,6 +315,81 @@ impl VaultIndex {
             }
         }
         changed
+    }
+
+    /// Rewrite links after many notes moved at once, as a folder move does.
+    ///
+    /// Doing this one note at a time would be wrong: every call computes its
+    /// rewrite from the *original* body, so if two moved notes are both linked
+    /// from a third, the second result would be written over the first and lose
+    /// its change. Handling the batch in one pass applies every replacement to
+    /// each body before it is composed.
+    ///
+    /// Paths in the result are where each note lives *after* the move, so the
+    /// caller can write them without further translation.
+    pub fn rewrite_links_for_moves(&self, moves: &[(String, String)]) -> Vec<(String, String)> {
+        if moves.is_empty() {
+            return Vec::new();
+        }
+        let moved: HashMap<&str, &str> = moves.iter().map(|(from, to)| (from.as_str(), to.as_str())).collect();
+
+        let mut changed = Vec::new();
+        for note in &self.notes {
+            // Every distinct spelling in this note that points at a moved note,
+            // paired with where that note ended up.
+            let mut stale: Vec<(&str, &str)> = note
+                .links
+                .iter()
+                .filter_map(|link| {
+                    let target = self.resolve(&note.meta.path, &link.target)?;
+                    let destination = moved.get(target.as_str())?;
+                    Some((link.target.as_str(), *destination))
+                })
+                .collect();
+            stale.sort();
+            stale.dedup();
+            if stale.is_empty() {
+                continue;
+            }
+
+            let mut body = note.body.clone();
+            let mut touched = false;
+            for (target, destination) in stale {
+                let replacement = self.replacement_for(destination);
+                if replacement == strip_note_ext(target) {
+                    // A bare-name link to a note that only changed folder still
+                    // resolves; rewriting it would be a no-op edit.
+                    continue;
+                }
+                let (next, hit) = replace_wikilink_target(&body, target, &replacement);
+                if hit {
+                    body = next;
+                    touched = true;
+                }
+            }
+            if !touched {
+                continue;
+            }
+
+            let path = moved
+                .get(note.meta.path.as_str())
+                .map(|to| (*to).to_string())
+                .unwrap_or_else(|| note.meta.path.clone());
+            changed.push((path, crate::frontmatter::compose(&note.frontmatter, &body)));
+        }
+        changed
+    }
+
+    /// How a link to `to` should be spelled: the bare name when that is
+    /// unambiguous across the vault, otherwise the full path.
+    fn replacement_for(&self, to: &str) -> String {
+        let stem = strip_note_ext(to.rsplit('/').next().unwrap_or(to)).to_string();
+        let ambiguous = self.by_key.get(&stem.to_lowercase()).map(|hits| hits.len() > 1).unwrap_or(false);
+        if ambiguous {
+            strip_note_ext(to).to_string()
+        } else {
+            stem
+        }
     }
 }
 
@@ -506,5 +574,63 @@ mod tests {
         assert_eq!(changed.len(), 1);
         assert!(changed[0].1.contains("[[Alpha One]]"));
         assert!(changed[0].1.contains("[[Alpha One|the first]]"));
+    }
+
+    #[test]
+    fn batch_rewrite_keeps_every_change_to_one_note() {
+        // Ref links to two notes that move together. Rewriting the moves one at
+        // a time would compute both from Ref's original body, and whichever was
+        // written last would drop the other's change.
+        let vault = vault_with("batch", &[
+            ("Projects/Alpha.md", "# Alpha\n"),
+            ("Projects/Beta.md", "# Beta\n"),
+            ("Ref.md", "see [[Projects/Alpha]] and [[Projects/Beta]]\n"),
+        ]);
+        let index = VaultIndex::build(&vault);
+        let moves = vec![
+            ("Projects/Alpha.md".to_string(), "Archive/Alpha.md".to_string()),
+            ("Projects/Beta.md".to_string(), "Archive/Beta.md".to_string()),
+        ];
+        let changed = index.rewrite_links_for_moves(&moves);
+        assert_eq!(changed.len(), 1);
+        assert!(changed[0].1.contains("[[Alpha]]"));
+        assert!(changed[0].1.contains("[[Beta]]"));
+    }
+
+    #[test]
+    fn batch_rewrite_leaves_bare_name_links_alone() {
+        // The filename does not change in a folder move, so a bare-name link
+        // still resolves and must not be churned.
+        let vault = vault_with("batch-bare", &[
+            ("Projects/Alpha.md", "# Alpha\n"),
+            ("Ref.md", "see [[Alpha]]\n"),
+        ]);
+        let index = VaultIndex::build(&vault);
+        let moves = vec![("Projects/Alpha.md".to_string(), "Archive/Alpha.md".to_string())];
+        assert!(index.rewrite_links_for_moves(&moves).is_empty());
+    }
+
+    #[test]
+    fn batch_rewrite_writes_a_moved_note_to_its_new_path() {
+        // The linking note is itself inside the folder being moved.
+        let vault = vault_with("batch-self", &[
+            ("Projects/Alpha.md", "# Alpha\n"),
+            ("Projects/Ref.md", "see [[Projects/Alpha]]\n"),
+        ]);
+        let index = VaultIndex::build(&vault);
+        let moves = vec![
+            ("Projects/Alpha.md".to_string(), "Archive/Alpha.md".to_string()),
+            ("Projects/Ref.md".to_string(), "Archive/Ref.md".to_string()),
+        ];
+        let changed = index.rewrite_links_for_moves(&moves);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].0, "Archive/Ref.md");
+    }
+
+    #[test]
+    fn batch_rewrite_of_nothing_changes_nothing() {
+        let vault = vault_with("batch-empty", &[("A.md", "[[B]]\n"), ("B.md", "x\n")]);
+        let index = VaultIndex::build(&vault);
+        assert!(index.rewrite_links_for_moves(&[]).is_empty());
     }
 }

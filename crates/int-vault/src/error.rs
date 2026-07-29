@@ -20,6 +20,15 @@ pub enum VaultError {
     #[error("invalid note path: {0}")]
     InvalidPath(String),
 
+    #[error("folder not found: {0}")]
+    FolderNotFound(String),
+
+    #[error("something already exists at: {0}")]
+    PathExists(String),
+
+    #[error("a folder cannot be moved inside itself: {0}")]
+    FolderIntoItself(String),
+
     #[error("heading not found: {0}")]
     HeadingNotFound(String),
 

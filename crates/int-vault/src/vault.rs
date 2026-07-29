@@ -325,6 +325,70 @@ impl Vault {
         Ok(path)
     }
 
+    /// Move or rename a folder and everything inside it.
+    ///
+    /// The move is a single rename, so the notes inside keep their filenames and
+    /// only their folder prefix changes. Callers that care about link integrity
+    /// should follow up with [`crate::index::VaultIndex::rewrite_links_for_moves`].
+    pub fn move_folder(&self, from: &str, to: &str) -> Result<(String, String)> {
+        let from_path = self.normalize(from)?;
+        let to_path = self.normalize(to)?;
+        if from_path.is_empty() {
+            return Err(VaultError::InvalidPath("the vault root cannot be moved".into()));
+        }
+        if to_path.is_empty() {
+            return Err(VaultError::InvalidPath("a folder cannot replace the vault root".into()));
+        }
+        // Moving a folder under itself would recurse forever, and renaming it
+        // onto its own path is a no-op worth rejecting rather than performing.
+        if to_path == from_path || to_path.starts_with(&format!("{from_path}/")) {
+            return Err(VaultError::FolderIntoItself(from_path));
+        }
+
+        let from_abs = self.root.join(from_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let to_abs = self.root.join(to_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if !from_abs.is_dir() {
+            return Err(VaultError::FolderNotFound(from_path));
+        }
+        if to_abs.exists() {
+            return Err(VaultError::PathExists(to_path));
+        }
+        if let Some(parent) = to_abs.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(&from_abs, &to_abs)?;
+        Ok((from_path, to_path))
+    }
+
+    /// Delete a folder and everything inside it.
+    ///
+    /// This removes files the user may not have been looking at, so callers are
+    /// expected to have confirmed with a count of what is about to go.
+    pub fn delete_folder(&self, relative: &str) -> Result<String> {
+        let path = self.normalize(relative)?;
+        if path.is_empty() {
+            return Err(VaultError::InvalidPath("the vault root cannot be deleted".into()));
+        }
+        let absolute = self.root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if !absolute.is_dir() {
+            return Err(VaultError::FolderNotFound(path));
+        }
+        fs::remove_dir_all(&absolute)?;
+        Ok(path)
+    }
+
+    /// Note paths inside a folder, at any depth.
+    pub fn notes_under(&self, folder: &str) -> Result<Vec<String>> {
+        let path = self.normalize(folder)?;
+        let prefix = format!("{path}/");
+        Ok(self
+            .list_notes()
+            .into_iter()
+            .map(|note| note.path)
+            .filter(|note| note.starts_with(&prefix))
+            .collect())
+    }
+
     /// Folder paths in the vault, sorted, excluding skipped and hidden ones.
     pub fn list_folders(&self) -> Vec<String> {
         let mut folders: Vec<String> = WalkDir::new(&self.root)
@@ -421,6 +485,68 @@ mod tests {
         assert_eq!(vault.normalize_note("Notes/Alpha").unwrap(), "Notes/Alpha.md");
         assert_eq!(vault.normalize_note("./Notes/../Beta.md").unwrap(), "Beta.md");
         assert_eq!(vault.normalize_note("image.png").unwrap(), "image.png.md");
+    }
+
+    #[test]
+    fn moves_a_folder_with_its_notes() {
+        let vault = temp_vault("move-folder");
+        vault.write_note("Projects/Alpha.md", "one").unwrap();
+        vault.write_note("Projects/Deep/Beta.md", "two").unwrap();
+
+        let (from, to) = vault.move_folder("Projects", "Archive/Projects").unwrap();
+        assert_eq!((from.as_str(), to.as_str()), ("Projects", "Archive/Projects"));
+        assert!(vault.exists("Archive/Projects/Alpha.md"));
+        assert!(vault.exists("Archive/Projects/Deep/Beta.md"));
+        assert!(!vault.exists("Projects/Alpha.md"));
+    }
+
+    #[test]
+    fn refuses_to_move_a_folder_into_itself() {
+        let vault = temp_vault("move-folder-cycle");
+        vault.create_folder("Projects").unwrap();
+        assert!(vault.move_folder("Projects", "Projects/Inner").is_err());
+        assert!(vault.move_folder("Projects", "Projects").is_err());
+        // A folder whose name merely starts the same is a legitimate target.
+        assert!(vault.move_folder("Projects", "ProjectsArchive").is_ok());
+    }
+
+    #[test]
+    fn refuses_to_move_onto_something_that_exists() {
+        let vault = temp_vault("move-folder-clash");
+        vault.create_folder("One").unwrap();
+        vault.create_folder("Two").unwrap();
+        assert!(vault.move_folder("One", "Two").is_err());
+    }
+
+    #[test]
+    fn deletes_a_folder_and_its_contents() {
+        let vault = temp_vault("delete-folder");
+        vault.write_note("Scratch/Note.md", "gone").unwrap();
+        assert_eq!(vault.delete_folder("Scratch").unwrap(), "Scratch");
+        assert!(!vault.exists("Scratch/Note.md"));
+        assert!(vault.delete_folder("Scratch").is_err());
+    }
+
+    #[test]
+    fn refuses_to_delete_or_move_the_vault_root() {
+        let vault = temp_vault("protect-root");
+        assert!(vault.delete_folder("").is_err());
+        assert!(vault.delete_folder(".").is_err());
+        assert!(vault.move_folder("", "Elsewhere").is_err());
+    }
+
+    #[test]
+    fn lists_notes_under_a_folder_at_any_depth() {
+        let vault = temp_vault("notes-under");
+        vault.write_note("Projects/Alpha.md", "a").unwrap();
+        vault.write_note("Projects/Deep/Beta.md", "b").unwrap();
+        vault.write_note("Elsewhere.md", "c").unwrap();
+        // A sibling whose name shares the prefix must not be swept in.
+        vault.write_note("ProjectsOld/Gamma.md", "d").unwrap();
+
+        let mut under = vault.notes_under("Projects").unwrap();
+        under.sort();
+        assert_eq!(under, vec!["Projects/Alpha.md", "Projects/Deep/Beta.md"]);
     }
 
     #[test]
