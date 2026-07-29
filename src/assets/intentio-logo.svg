@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="120" height="120" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="intentioGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f05f36"/>
+      <stop offset="100%" stop-color="#f7a63c"/>
+    </linearGradient>
+    <linearGradient id="intentioStroke" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#fbd9c7"/>
+      <stop offset="100%" stop-color="#ffffff"/>
+    </linearGradient>
+  </defs>
+  <rect width="120" height="120" rx="26" fill="#041426"/>
+  <circle cx="60" cy="60" r="46" fill="url(#intentioGradient)"/>
+  <path d="M49 32h22l-2 56h-18z" fill="#fff" opacity="0.9"/>
+  <circle cx="60" cy="82" r="10" fill="url(#intentioStroke)"/>
+</svg>

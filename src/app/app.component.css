@@ -1,0 +1,368 @@
+:host {
+  display: block;
+  height: 100%;
+}
+
+/* Three columns under a title bar, above a status bar. Columns collapse by
+   removing their grid track, so hiding a panel reclaims the space entirely. */
+.shell {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr) 17rem;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "titlebar titlebar titlebar"
+    "sidebar  content  context"
+    "status   status   status";
+  height: 100%;
+  background: var(--surface);
+}
+
+.shell.no-sidebar {
+  grid-template-columns: minmax(0, 1fr) 17rem;
+  grid-template-areas:
+    "titlebar titlebar"
+    "content  context"
+    "status   status";
+}
+
+.shell.no-context {
+  grid-template-columns: 15rem minmax(0, 1fr);
+  grid-template-areas:
+    "titlebar titlebar"
+    "sidebar  content"
+    "status   status";
+}
+
+.shell.no-sidebar.no-context {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "titlebar"
+    "content"
+    "status";
+}
+
+/* ---------------------------------------------------------------- titlebar */
+
+.titlebar {
+  grid-area: titlebar;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.titlebar .left,
+.titlebar .right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.titlebar .center {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+button.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+button.icon:hover {
+  background: var(--hover);
+  color: var(--ink-strong);
+}
+
+button.icon.small {
+  width: 1.6rem;
+  height: 1.6rem;
+  font-size: 0.75rem;
+}
+
+button.icon.danger:hover {
+  color: var(--danger);
+}
+
+button.icon.on {
+  background: var(--selected);
+  color: var(--accent);
+}
+
+/* Read / Source segmented control. */
+.mode-switch {
+  display: inline-flex;
+  padding: 2px;
+  margin-right: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+}
+
+.mode-switch button {
+  padding: 0.18rem 0.7rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.mode-switch button:hover {
+  color: var(--ink);
+}
+
+.mode-switch button.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+.vault {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.7rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-strong);
+  font-size: 0.85rem;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.vault:hover {
+  background: var(--hover);
+}
+
+.vault i {
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+.search {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: min(30rem, 100%);
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.search:hover {
+  border-color: var(--accent);
+}
+
+.search span {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----------------------------------------------------------------- panels */
+
+.sidebar {
+  grid-area: sidebar;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  overflow-y: auto;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.9rem 1rem 0.5rem;
+}
+
+.heading {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--ink-faint);
+  font-weight: 600;
+}
+
+.badge {
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--ink-faint);
+  font-size: 0.65rem;
+}
+
+.context {
+  grid-area: context;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.content {
+  grid-area: content;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface);
+}
+
+.note-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 2rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.note-head h1 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--ink-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: none;
+}
+
+.note-actions .path {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  margin-right: 0.35rem;
+}
+
+.blank {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  color: var(--ink-faint);
+}
+
+.blank i {
+  font-size: 1.6rem;
+  opacity: 0.4;
+}
+
+.blank p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+button.ghost {
+  padding: 0.5rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+button.ghost:hover {
+  background: var(--hover);
+  border-color: var(--accent);
+}
+
+/* --------------------------------------------------------------- statusbar */
+
+.statusbar {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.35rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+.statusbar .sep {
+  opacity: 0.4;
+  margin: 0 0.3rem;
+}
+
+.statusbar .message {
+  color: var(--accent);
+}
+
+.statusbar .error {
+  margin-left: auto;
+  color: var(--danger);
+}
+
+.statusbar .conflict {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.statusbar .conflict button {
+  padding: 0.05rem 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.statusbar .conflict button:hover {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+}
+
+.statusbar .conflict button.quiet {
+  border-color: transparent;
+  opacity: 0.75;
+}
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  padding: 0.08rem 0.32rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--ink-faint);
+}

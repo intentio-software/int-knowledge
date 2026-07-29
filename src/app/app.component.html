@@ -1,0 +1,201 @@
+@if (!vaultService.isOpen()) {
+  <app-vault-launcher
+    [recents]="vaultService.recents()"
+    [error]="vaultService.error()"
+    (openRequested)="chooseVault(false)"
+    (createRequested)="chooseVault(true)"
+    (recentChosen)="openRecent($event)"
+  ></app-vault-launcher>
+} @else {
+  <div class="shell" [class.no-sidebar]="!sidebarOpen()" [class.no-context]="!contextOpen()">
+    <header class="titlebar">
+      <div class="left">
+        <button type="button" class="icon" title="Toggle sidebar (⌘B)" (click)="toggleSidebar()">
+          <i class="pi pi-bars"></i>
+        </button>
+        <button type="button" class="vault" (click)="closeVault()" title="Close vault">
+          <i class="pi pi-book"></i>
+          <span>{{ vaultService.vault()?.name }}</span>
+        </button>
+      </div>
+
+      <div class="center">
+        <button type="button" class="search" (click)="openPalette('jump')">
+          <i class="pi pi-search"></i>
+          <span>{{ activePath() ?? "Jump to a note" }}</span>
+          <kbd>⌘O</kbd>
+        </button>
+      </div>
+
+      <div class="right">
+        <button
+          type="button"
+          class="icon"
+          [class.on]="graphOpen()"
+          title="Graph view (⌘G)"
+          (click)="toggleGraph()"
+        >
+          <i class="pi pi-share-alt"></i>
+        </button>
+        <button type="button" class="icon" title="New note (⌘N)" (click)="openPalette('jump')">
+          <i class="pi pi-file-plus"></i>
+        </button>
+        <button type="button" class="icon" title="Search notes (⌘⇧F)" (click)="openPalette('search')">
+          <i class="pi pi-search"></i>
+        </button>
+        <button type="button" class="icon" [title]="theme.label() + ' theme'" (click)="theme.cycle()">
+          <i class="pi" [ngClass]="theme.icon()"></i>
+        </button>
+        <button type="button" class="icon" title="Toggle side panel (⌘\)" (click)="toggleContext()">
+          <i class="pi pi-list"></i>
+        </button>
+        <button type="button" class="icon" title="About Intentio Knowledge" (click)="aboutOpen.set(true)">
+          <i class="pi pi-info-circle"></i>
+        </button>
+      </div>
+    </header>
+
+    <aside class="sidebar" *ngIf="sidebarOpen()">
+      <div class="sidebar-head">
+        <span class="heading">Notes</span>
+        <span class="badge">{{ vaultService.notes().length }}</span>
+      </div>
+      <app-note-tree
+        [entries]="vaultService.tree()"
+        [activePath]="activePath()"
+        (noteSelected)="openNote($event)"
+      ></app-note-tree>
+    </aside>
+
+    <main class="content">
+      @if (graphOpen()) {
+        <div class="note-head">
+          <h1>Graph</h1>
+          <div class="note-actions">
+            <span class="path">every note and link in {{ vaultService.vault()?.name }}</span>
+            <button type="button" class="icon small" title="Back to note (⌘G)" (click)="toggleGraph()">
+              <i class="pi pi-times"></i>
+            </button>
+          </div>
+        </div>
+        <app-graph-view
+          [data]="graphData()"
+          [activePath]="activePath()"
+          (noteOpened)="openFromGraph($event)"
+          (noteCreateRequested)="createFromGraph($event)"
+        ></app-graph-view>
+      } @else if (vaultService.activeNote(); as note) {
+        <div class="note-head">
+          <h1>{{ note.title }}</h1>
+          <div class="note-actions">
+            <div class="mode-switch" role="group" aria-label="View mode">
+              <button
+                type="button"
+                [class.on]="viewMode() === 'read'"
+                title="Rendered markdown (⌘E)"
+                (click)="setViewMode('read')"
+              >
+                Read
+              </button>
+              <button
+                type="button"
+                [class.on]="viewMode() === 'source'"
+                title="Markdown source (⌘E)"
+                (click)="setViewMode('source')"
+              >
+                Source
+              </button>
+            </div>
+            <span class="path">{{ note.path }}</span>
+            <button type="button" class="icon small" title="Rename or move" (click)="startRename()">
+              <i class="pi pi-pencil"></i>
+            </button>
+            <button type="button" class="icon small danger" title="Delete note" (click)="deleteActive()">
+              <i class="pi pi-trash"></i>
+            </button>
+          </div>
+        </div>
+
+        @if (viewMode() === 'read') {
+          <app-markdown-view
+            [note]="note"
+            [allNotes]="vaultService.notes()"
+            [vaultRoot]="vaultService.vault()?.path ?? ''"
+            (linkFollowed)="followLink($event)"
+            (tagSelected)="searchTag($event)"
+          ></app-markdown-view>
+        } @else {
+          <app-note-editor
+            [note]="note"
+            [allNotes]="vaultService.notes()"
+            (contentSaved)="saveActive($event)"
+            (linkFollowed)="followLink($event)"
+            (dirtyChanged)="vaultService.editorDirty.set($event)"
+          ></app-note-editor>
+        }
+      } @else {
+        <div class="blank">
+          <i class="pi pi-file"></i>
+          <p>Pick a note from the sidebar, or press <kbd>⌘O</kbd> to jump to one.</p>
+          <button type="button" class="ghost" (click)="openPalette('jump')">Create a note</button>
+        </div>
+      }
+    </main>
+
+    <aside class="context" *ngIf="contextOpen()">
+      <app-context-panel
+        [note]="vaultService.activeNote()"
+        (noteOpened)="openNote($event)"
+        (linkFollowed)="followUnresolvedLink($event)"
+        (headingSelected)="scrollToHeading($event)"
+        (tagSelected)="searchTag($event)"
+      ></app-context-panel>
+    </aside>
+
+    <footer class="statusbar">
+      <span class="left-status">
+        {{ vaultService.vault()?.notes }} notes
+        <span class="sep">·</span>
+        {{ vaultService.vault()?.unresolved }} unresolved links
+      </span>
+      <span class="message" *ngIf="status()">{{ status() }}</span>
+
+      <span class="conflict" *ngIf="vaultService.conflict() as path">
+        <i class="pi pi-exclamation-triangle"></i>
+        {{ path }} changed on disk while you were editing
+        <button type="button" (click)="vaultService.resolveConflict()">Reload from disk</button>
+        <button type="button" class="quiet" (click)="vaultService.conflict.set(null)">Keep mine</button>
+      </span>
+
+      <span class="error" *ngIf="vaultService.error() as error">{{ error }}</span>
+    </footer>
+  </div>
+
+  @if (paletteMode(); as mode) {
+    <app-command-palette
+      [mode]="mode"
+      [notes]="vaultService.notes()"
+      [hits]="searchHits()"
+      (queryChanged)="onPaletteQuery($event)"
+      (noteChosen)="openNote($event)"
+      (noteCreateRequested)="createNote($event)"
+      (dismissed)="closePalette()"
+    ></app-command-palette>
+  }
+
+  @if (renaming(); as path) {
+    <app-prompt-dialog
+      title="Rename or move note"
+      hint="Give a vault-relative path. Links in other notes are updated automatically."
+      confirmLabel="Rename"
+      [initialValue]="path"
+      (confirmed)="confirmRename($event)"
+      (cancelled)="renaming.set(null)"
+    ></app-prompt-dialog>
+  }
+}
+
+<!-- Outside the vault check: About is reachable from the launcher too. -->
+@if (aboutOpen()) {
+  <app-about-dialog [version]="appVersion()" (closed)="aboutOpen.set(false)"></app-about-dialog>
+}

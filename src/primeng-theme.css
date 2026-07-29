@@ -1,0 +1,109 @@
+:root {
+  --p-font-family:
+    "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
+    sans-serif;
+  --p-text-color: #062a44;
+  --p-surface: #ffffff;
+  --p-surface-dark: #03182d;
+  --p-border-color: rgba(6, 42, 68, 0.25);
+  --p-focus-ring: rgba(240, 95, 54, 0.35);
+}
+
+.p-component {
+  font-family: var(--p-font-family);
+  font-size: 0.95rem;
+  line-height: 1.4;
+  box-sizing: border-box;
+}
+
+.p-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  padding: 0.6rem 1.1rem;
+  font-weight: 500;
+  background: var(--p-surface-dark);
+  color: #f5f7fb;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.p-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--p-focus-ring);
+}
+
+.p-button-rounded {
+  border-radius: 50%;
+}
+
+.p-button-lg {
+  width: 3.25rem;
+  height: 3.25rem;
+  padding: 0;
+}
+
+.p-speeddial {
+  position: relative;
+  display: inline-block;
+}
+
+.p-speeddial-button {
+  position: relative;
+  z-index: 1;
+}
+
+.p-speeddial-direction-up .p-speeddial-list {
+  position: absolute;
+  bottom: 3.75rem;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.p-speeddial-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 1rem;
+}
+
+.p-speeddial-item {
+  display: inline-flex;
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.p-speeddial-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: none;
+  width: 3.25rem;
+  height: 3.25rem;
+  padding: 1rem;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.p-speeddial-action .p-speeddial-action-icon {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.p-speeddial-action:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--p-focus-ring);
+}

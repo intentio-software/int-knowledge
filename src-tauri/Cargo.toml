@@ -1,0 +1,29 @@
+[package]
+name = "int-knowledge"
+description = "Intentio Knowledge — a local-first markdown vault with MCP built in."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+# The `_lib` suffix keeps the library name distinct from the binary, which
+# otherwise collides on Windows (rust-lang/cargo#8519).
+name = "int_knowledge_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+int-vault = { path = "../crates/int-vault" }
+# `protocol-asset` lets the webview load vault images through asset://,
+# which read mode needs for `![[image.png]]` embeds.
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+notify = "8.2.0"
+tauri-plugin-updater = "2.10.1"

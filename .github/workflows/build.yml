@@ -1,0 +1,173 @@
+name: Build
+
+on:
+  repository_dispatch:
+    types: [tauri-build]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            args: --bundles deb,appimage
+            rust-targets: ''
+          - os: macos-latest
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - os: windows-latest
+            args: --bundles nsis
+            rust-targets: ''
+
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      # The Rust side is a cargo workspace rooted at the repo, not at src-tauri.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - run: npm ci
+
+      - name: Verify signing key is configured
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set. Set it to the base64-encoded content of your .key file."
+            exit 1
+          fi
+          echo "Signing key present (length: ${#TAURI_SIGNING_PRIVATE_KEY})"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Get or create draft release
+        id: release
+        shell: bash
+        run: |
+          TAG=${{ github.event.client_payload.tag }}
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases \
+            --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)
+          if [ -z "$RELEASE_ID" ]; then
+            RELEASE_ID=$(gh release create $TAG \
+              --draft --title "$TAG" --generate-notes \
+              --json id --jq '.id')
+          fi
+          echo "id=$RELEASE_ID" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # Apple code-signing + notarization (macOS only — ignored on other platforms)
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          releaseId: ${{ steps.release.outputs.id }}
+          args: ${{ matrix.args }}
+
+      # The MCP server ships as its own binary rather than inside the app bundle.
+      # It has to be on PATH to be registered with an agent, and burying it in
+      # Contents/Resources would not put it there. Built per platform so the
+      # universal macOS app does not hand Intel users an arm64-only binary.
+      - name: Build MCP server
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            cargo build --release -p int-knowledge-mcp --target aarch64-apple-darwin
+            cargo build --release -p int-knowledge-mcp --target x86_64-apple-darwin
+            lipo -create -output int-knowledge-mcp \
+              target/aarch64-apple-darwin/release/int-knowledge-mcp \
+              target/x86_64-apple-darwin/release/int-knowledge-mcp
+            tar -czf int-knowledge-mcp-macos-universal.tar.gz int-knowledge-mcp
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cargo build --release -p int-knowledge-mcp
+            7z a int-knowledge-mcp-windows-x86_64.zip ./target/release/int-knowledge-mcp.exe
+          else
+            cargo build --release -p int-knowledge-mcp
+            tar -czf int-knowledge-mcp-linux-x86_64.tar.gz -C target/release int-knowledge-mcp
+          fi
+
+      - name: Attach MCP server to release
+        shell: bash
+        run: gh release upload ${{ steps.release.outputs.tag }} int-knowledge-mcp-*.tar.gz int-knowledge-mcp-*.zip --clobber
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Publish release
+        shell: bash
+        run: gh release edit ${{ github.event.client_payload.tag }} --draft=false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List release assets
+        shell: bash
+        run: |
+          echo "Assets in release ${{ github.event.client_payload.tag }}:"
+          gh release view ${{ github.event.client_payload.tag }} --json assets \
+            --jq '.assets[].name'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate latest.json from release .sig files
+        id: gen_json
+        continue-on-error: true
+        run: node scripts/generate-update-json.js ${{ github.event.client_payload.tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Upload latest.json
+        if: steps.gen_json.outcome == 'success'
+        shell: bash
+        run: gh release upload ${{ github.event.client_payload.tag }} latest.json --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

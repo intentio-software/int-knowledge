@@ -1,0 +1,618 @@
+//! The tool surface an AI agent sees for a vault.
+//!
+//! Tool descriptions here are part of the product: they are the only thing the
+//! model reads before deciding what to call, so they say what a tool does *and*
+//! when to prefer it over a neighbour.
+
+use serde_json::{json, Map, Value};
+
+use int_vault::{frontmatter, now_millis, search, SearchOptions};
+
+use crate::mcp::{opt_bool, opt_str, opt_str_list, opt_usize, require_str, ServerInfo, Tool, ToolOutput, ToolProvider};
+use crate::workspace::Workspace;
+
+pub struct VaultTools {
+    workspace: Workspace,
+}
+
+impl VaultTools {
+    pub fn new(workspace: Workspace) -> Self {
+        VaultTools { workspace }
+    }
+
+    /// Schema fragment for the shared `vault` selector.
+    fn vault_property(&self) -> Value {
+        let names = self.workspace.names().join(", ");
+        json!({
+            "type": "string",
+            "description": format!(
+                "Which vault to act on. Open vaults: {names}.{}",
+                if self.workspace.is_single() { " Optional — only one vault is open." } else { " Required." }
+            )
+        })
+    }
+
+    /// Build an object schema with the `vault` selector already mixed in.
+    fn schema(&self, properties: Value, required: &[&str]) -> Value {
+        let mut props = properties.as_object().cloned().unwrap_or_default();
+        props.insert("vault".into(), self.vault_property());
+        let mut required: Vec<&str> = required.to_vec();
+        if !self.workspace.is_single() {
+            required.push("vault");
+        }
+        json!({ "type": "object", "properties": props, "required": required })
+    }
+}
+
+impl ToolProvider for VaultTools {
+    fn server_info(&self) -> ServerInfo {
+        ServerInfo {
+            name: "intentio-knowledge".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            instructions: concat!(
+                "Read and write an Intentio Knowledge vault — a folder of markdown notes on the user's ",
+                "filesystem, linked with [[wikilinks]].\n\n",
+                "Guidance:\n",
+                "- Paths are vault-relative and forward-slashed, e.g. `Projects/Alpha.md`. The `.md` ",
+                "extension is added automatically when omitted.\n",
+                "- Prefer `search_notes` to find a note before reading it; prefer `append_note` over ",
+                "`write_note` when adding to an existing note, since `write_note` replaces the whole file.\n",
+                "- Link notes together with `[[Note Name]]`. Links to notes that do not exist yet are fine ",
+                "and show up in `unresolved_links` as suggested writing.\n",
+                "- Vault files are the user's own documents. Deleting or overwriting is destructive and ",
+                "not undoable from here; confirm before doing either.",
+            )
+            .into(),
+        }
+    }
+
+    fn tools(&self) -> Vec<Tool> {
+        vec![
+            Tool::new(
+                "list_vaults",
+                "List the vaults this server has open, with their paths and note counts. Call this first when unsure which vault to use.",
+                json!({ "type": "object", "properties": {} }),
+            ),
+            Tool::new(
+                "vault_info",
+                "Summarize a vault: path, note and folder counts, tag count, and how many links point at notes that do not exist yet.",
+                self.schema(json!({}), &[]),
+            ),
+            Tool::new(
+                "list_notes",
+                "List notes with their titles, tags and modification times. Optionally restrict to a folder or a tag. Use search_notes instead when looking for content.",
+                self.schema(
+                    json!({
+                        "folder": {"type": "string", "description": "Only notes under this folder, e.g. `Projects`."},
+                        "tag": {"type": "string", "description": "Only notes with this tag. Nested tags are included: `project` matches `project/alpha`."},
+                        "limit": {"type": "integer", "description": "Maximum notes to return. Default 200."}
+                    }),
+                    &[],
+                ),
+            ),
+            Tool::new(
+                "list_folders",
+                "List the folders in a vault, so new notes can be filed somewhere that already exists.",
+                self.schema(json!({}), &[]),
+            ),
+            Tool::new(
+                "read_note",
+                "Read one note: its frontmatter, body, headings, outgoing links and backlinks. This is the tool to use before editing a note.",
+                self.schema(
+                    json!({
+                        "path": {"type": "string", "description": "Vault-relative path, e.g. `Projects/Alpha.md`."},
+                        "include_backlinks": {"type": "boolean", "description": "Include notes that link here. Default true."}
+                    }),
+                    &["path"],
+                ),
+            ),
+            Tool::new(
+                "create_note",
+                "Create a new note. Fails if one already exists at that path, so it can never overwrite the user's work. Frontmatter is generated from the title, tags and aliases given.",
+                self.schema(
+                    json!({
+                        "path": {"type": "string", "description": "Vault-relative path. `.md` is added if missing."},
+                        "content": {"type": "string", "description": "Markdown body. Use [[Note Name]] to link to other notes."},
+                        "title": {"type": "string", "description": "Title for the frontmatter. Defaults to the filename."},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for the frontmatter."},
+                        "aliases": {"type": "array", "items": {"type": "string"}, "description": "Other names this note should be findable by."}
+                    }),
+                    &["path"],
+                ),
+            ),
+            Tool::new(
+                "write_note",
+                "Replace a note's entire contents, creating it if absent. Destructive: prefer append_note or update_frontmatter for incremental changes.",
+                self.schema(
+                    json!({
+                        "path": {"type": "string", "description": "Vault-relative path."},
+                        "content": {"type": "string", "description": "Full file contents, including any frontmatter block."}
+                    }),
+                    &["path", "content"],
+                ),
+            ),
+            Tool::new(
+                "append_note",
+                "Append text to a note, either at the end or under a specific heading. Creates the note if it does not exist. The safe way to add to existing notes.",
+                self.schema(
+                    json!({
+                        "path": {"type": "string", "description": "Vault-relative path."},
+                        "text": {"type": "string", "description": "Markdown to append."},
+                        "heading": {"type": "string", "description": "Append at the end of this section instead of the end of the file. The heading must already exist."}
+                    }),
+                    &["path", "text"],
+                ),
+            ),
+            Tool::new(
+                "update_frontmatter",
+                "Set or remove frontmatter fields on a note, leaving the body untouched.",
+                self.schema(
+                    json!({
+                        "path": {"type": "string", "description": "Vault-relative path."},
+                        "set": {"type": "object", "description": "Fields to set, e.g. {\"status\": \"active\", \"tags\": [\"alpha\"]}."},
+                        "remove": {"type": "array", "items": {"type": "string"}, "description": "Field names to remove."}
+                    }),
+                    &["path"],
+                ),
+            ),
+            Tool::new(
+                "delete_note",
+                "Delete a note from the vault. Not undoable from here — confirm with the user first.",
+                self.schema(json!({"path": {"type": "string", "description": "Vault-relative path."}}), &["path"]),
+            ),
+            Tool::new(
+                "move_note",
+                "Move or rename a note, updating [[wikilinks]] in other notes so nothing breaks.",
+                self.schema(
+                    json!({
+                        "from": {"type": "string", "description": "Current vault-relative path."},
+                        "to": {"type": "string", "description": "New vault-relative path. Folders are created as needed."},
+                        "update_links": {"type": "boolean", "description": "Rewrite wikilinks elsewhere in the vault. Default true."}
+                    }),
+                    &["from", "to"],
+                ),
+            ),
+            Tool::new(
+                "search_notes",
+                "Full-text search across a vault, returning matching notes with the lines that matched. All terms must appear; wrap a phrase in double quotes to match it exactly.",
+                self.schema(
+                    json!({
+                        "query": {"type": "string", "description": "Search terms, e.g. `roadmap q3` or `\"release train\"`."},
+                        "folder": {"type": "string", "description": "Only search under this folder."},
+                        "tag": {"type": "string", "description": "Only search notes carrying this tag."},
+                        "limit": {"type": "integer", "description": "Maximum notes to return. Default 25."}
+                    }),
+                    &["query"],
+                ),
+            ),
+            Tool::new(
+                "get_backlinks",
+                "List the notes that link to a given note, with the line each reference appears on. Use this to understand how a note is used before changing it.",
+                self.schema(json!({"path": {"type": "string", "description": "Vault-relative path."}}), &["path"]),
+            ),
+            Tool::new(
+                "get_links",
+                "List a note's outgoing links, showing which resolve to real notes and which do not.",
+                self.schema(json!({"path": {"type": "string", "description": "Vault-relative path."}}), &["path"]),
+            ),
+            Tool::new(
+                "list_tags",
+                "List every tag in a vault with how many notes carry it.",
+                self.schema(json!({}), &[]),
+            ),
+            Tool::new(
+                "unresolved_links",
+                "List links that point at notes which do not exist yet — the vault's implicit to-write list.",
+                self.schema(json!({"limit": {"type": "integer", "description": "Maximum results. Default 100."}}), &[]),
+            ),
+            Tool::new(
+                "create_folder",
+                "Create a folder in the vault. Rarely needed: writing a note creates its folders automatically.",
+                self.schema(json!({"path": {"type": "string", "description": "Vault-relative folder path."}}), &["path"]),
+            ),
+        ]
+    }
+
+    fn call(&mut self, name: &str, args: &Value) -> Result<ToolOutput, String> {
+        if name == "list_vaults" {
+            let vaults: Vec<Value> = self
+                .workspace
+                .entries()
+                .iter()
+                .map(|entry| {
+                    json!({
+                        "name": entry.name(),
+                        "path": entry.vault().root().to_string_lossy(),
+                        "notes": entry.vault().list_notes().len(),
+                    })
+                })
+                .collect();
+            return Ok(ToolOutput::json(&json!({ "vaults": vaults })));
+        }
+
+        let selector = opt_str(args, "vault");
+        let entry = self.workspace.select(selector.as_deref())?;
+
+        match name {
+            "vault_info" => {
+                let vault_name = entry.name();
+                let root = entry.vault().root().to_string_lossy().to_string();
+                let folders = entry.vault().list_folders().len();
+                let attachments = entry.vault().list_attachments().len();
+                let index = entry.index();
+                Ok(ToolOutput::json(&json!({
+                    "name": vault_name,
+                    "path": root,
+                    "notes": index.len(),
+                    "folders": folders,
+                    "attachments": attachments,
+                    "tags": index.tags().len(),
+                    "unresolved_links": index.unresolved().len(),
+                })))
+            }
+
+            "list_notes" => {
+                let folder = opt_str(args, "folder").map(|f| {
+                    let trimmed = f.trim_matches('/').to_string();
+                    if trimmed.is_empty() { trimmed } else { format!("{trimmed}/") }
+                });
+                let tag = opt_str(args, "tag");
+                let limit = opt_usize(args, "limit", 200);
+
+                let index = entry.index();
+                let metas: Vec<_> = match &tag {
+                    Some(tag) => index.notes_with_tag(tag).into_iter().cloned().collect(),
+                    None => index.notes().iter().map(|note| note.meta.clone()).collect(),
+                };
+                let total = metas.len();
+                let notes: Vec<Value> = metas
+                    .into_iter()
+                    .filter(|meta| match &folder {
+                        Some(prefix) if !prefix.is_empty() => meta.path.starts_with(prefix.as_str()),
+                        _ => true,
+                    })
+                    .take(limit)
+                    .map(|meta| serde_json::to_value(meta).unwrap_or(Value::Null))
+                    .collect();
+                Ok(ToolOutput::json(&json!({ "count": notes.len(), "total": total, "notes": notes })))
+            }
+
+            "list_folders" => {
+                Ok(ToolOutput::json(&json!({ "folders": entry.vault().list_folders() })))
+            }
+
+            "read_note" => {
+                let path = require_str(args, "path")?;
+                let note = entry.vault().read_note(&path).map_err(|err| err.to_string())?;
+                let resolved_path = note.meta.path.clone();
+                let include_backlinks = opt_bool(args, "include_backlinks", true);
+
+                let index = entry.index();
+                let links = index.outgoing(&resolved_path);
+                let backlinks =
+                    if include_backlinks { index.backlinks(&resolved_path) } else { Vec::new() };
+
+                Ok(ToolOutput::json(&json!({
+                    "path": note.meta.path,
+                    "title": note.meta.title,
+                    "tags": note.meta.tags,
+                    "aliases": note.meta.aliases,
+                    "modified": note.meta.modified,
+                    "frontmatter": note.frontmatter,
+                    "body": note.body,
+                    "headings": note.scan.headings,
+                    "links": links,
+                    "backlinks": backlinks,
+                })))
+            }
+
+            "create_note" => {
+                let path = require_str(args, "path")?;
+                let body = opt_str(args, "content").unwrap_or_default();
+                let tags = opt_str_list(args, "tags");
+                let aliases = opt_str_list(args, "aliases");
+
+                let mut fm = Map::new();
+                if let Some(title) = opt_str(args, "title") {
+                    fm.insert("title".into(), Value::String(title));
+                }
+                if !tags.is_empty() {
+                    fm.insert("tags".into(), json!(tags));
+                }
+                if !aliases.is_empty() {
+                    fm.insert("aliases".into(), json!(aliases));
+                }
+                fm.insert("created".into(), Value::Number(now_millis().into()));
+
+                let content = frontmatter::compose(&fm, &body);
+                let written = entry.vault().create_note(&path, &content).map_err(|err| err.to_string())?;
+                entry.invalidate();
+                Ok(ToolOutput::json(&json!({ "created": written })))
+            }
+
+            "write_note" => {
+                let path = require_str(args, "path")?;
+                let content = args.get("content").and_then(Value::as_str).unwrap_or_default();
+                let existed = entry.vault().exists(&entry.vault().normalize_note(&path).map_err(|e| e.to_string())?);
+                let written = entry.vault().write_note(&path, content).map_err(|err| err.to_string())?;
+                entry.invalidate();
+                Ok(ToolOutput::json(&json!({ "written": written, "replaced_existing": existed })))
+            }
+
+            "append_note" => {
+                let path = require_str(args, "path")?;
+                let text = require_str(args, "text")?;
+                let written = match opt_str(args, "heading") {
+                    Some(heading) => entry
+                        .vault()
+                        .append_under_heading(&path, &heading, &text)
+                        .map_err(|err| err.to_string())?,
+                    None => {
+                        let mut block = text.clone();
+                        if !block.ends_with('\n') {
+                            block.push('\n');
+                        }
+                        entry.vault().append_note(&path, &block).map_err(|err| err.to_string())?
+                    }
+                };
+                entry.invalidate();
+                Ok(ToolOutput::json(&json!({ "appended_to": written })))
+            }
+
+            "update_frontmatter" => {
+                let path = require_str(args, "path")?;
+                let mut note = entry.vault().read_note(&path).map_err(|err| err.to_string())?;
+                if let Some(Value::Object(set)) = args.get("set") {
+                    for (key, value) in set {
+                        note.frontmatter.insert(key.clone(), value.clone());
+                    }
+                }
+                for key in opt_str_list(args, "remove") {
+                    note.frontmatter.remove(&key);
+                }
+                let content = note.to_content();
+                let written = entry.vault().write_note(&note.meta.path, &content).map_err(|err| err.to_string())?;
+                entry.invalidate();
+                Ok(ToolOutput::json(&json!({ "updated": written, "frontmatter": note.frontmatter })))
+            }
+
+            "delete_note" => {
+                let path = require_str(args, "path")?;
+                let deleted = entry.vault().delete_note(&path).map_err(|err| err.to_string())?;
+                entry.invalidate();
+                Ok(ToolOutput::json(&json!({ "deleted": deleted })))
+            }
+
+            "move_note" => {
+                let from = require_str(args, "from")?;
+                let to = require_str(args, "to")?;
+                let update_links = opt_bool(args, "update_links", true);
+
+                let from_path = entry.vault().normalize_note(&from).map_err(|err| err.to_string())?;
+                let to_path = entry.vault().normalize_note(&to).map_err(|err| err.to_string())?;
+
+                // Work out the rewrites against the pre-move index, where the old
+                // links still resolve, then move and apply them.
+                let rewrites = if update_links {
+                    entry.index().rewrite_links_for_move(&from_path, &to_path)
+                } else {
+                    Vec::new()
+                };
+
+                let (moved_from, moved_to) =
+                    entry.vault().move_note(&from_path, &to_path).map_err(|err| err.to_string())?;
+
+                let mut updated = Vec::new();
+                for (path, content) in rewrites {
+                    match entry.vault().write_note(&path, &content) {
+                        Ok(written) => updated.push(written),
+                        Err(err) => eprintln!("[knowledge] link rewrite failed for {path}: {err}"),
+                    }
+                }
+                entry.invalidate();
+                Ok(ToolOutput::json(&json!({
+                    "from": moved_from,
+                    "to": moved_to,
+                    "notes_relinked": updated,
+                })))
+            }
+
+            "search_notes" => {
+                let query = require_str(args, "query")?;
+                let options = SearchOptions {
+                    limit: opt_usize(args, "limit", 25),
+                    folder: opt_str(args, "folder"),
+                    tag: opt_str(args, "tag"),
+                    ..SearchOptions::default()
+                };
+                let hits = search::search(entry.index(), &query, &options);
+                Ok(ToolOutput::json(&json!({ "query": query, "count": hits.len(), "results": hits })))
+            }
+
+            "get_backlinks" => {
+                let path = require_str(args, "path")?;
+                let resolved = entry.vault().normalize_note(&path).map_err(|err| err.to_string())?;
+                let backlinks = entry.index().backlinks(&resolved);
+                Ok(ToolOutput::json(&json!({
+                    "path": resolved,
+                    "count": backlinks.len(),
+                    "backlinks": backlinks,
+                })))
+            }
+
+            "get_links" => {
+                let path = require_str(args, "path")?;
+                let resolved = entry.vault().normalize_note(&path).map_err(|err| err.to_string())?;
+                let links = entry.index().outgoing(&resolved);
+                Ok(ToolOutput::json(&json!({ "path": resolved, "count": links.len(), "links": links })))
+            }
+
+            "list_tags" => {
+                let tags: Vec<Value> = entry
+                    .index()
+                    .tags()
+                    .into_iter()
+                    .map(|(tag, count)| json!({ "tag": tag, "notes": count }))
+                    .collect();
+                Ok(ToolOutput::json(&json!({ "count": tags.len(), "tags": tags })))
+            }
+
+            "unresolved_links" => {
+                let limit = opt_usize(args, "limit", 100);
+                let mut unresolved = entry.index().unresolved();
+                let total = unresolved.len();
+                unresolved.truncate(limit);
+                Ok(ToolOutput::json(&json!({ "total": total, "links": unresolved })))
+            }
+
+            "create_folder" => {
+                let path = require_str(args, "path")?;
+                let created = entry.vault().create_folder(&path).map_err(|err| err.to_string())?;
+                Ok(ToolOutput::json(&json!({ "created": created })))
+            }
+
+            other => Err(format!("unknown tool: {other}")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn tools_with(name: &str, files: &[(&str, &str)]) -> VaultTools {
+        let root: PathBuf = std::env::temp_dir()
+            .join(format!("int-knowledge-tools-{}-{name}", std::process::id()))
+            .join("vault");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        for (path, content) in files {
+            let full = root.join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, content).unwrap();
+        }
+        VaultTools::new(Workspace::open(&[root]).unwrap())
+    }
+
+    fn call(tools: &mut VaultTools, name: &str, args: Value) -> Value {
+        let output = tools.call(name, &args).expect("tool call succeeded");
+        serde_json::from_str(&output.text).expect("tool returned json")
+    }
+
+    #[test]
+    fn every_tool_has_a_description_and_object_schema() {
+        let tools = tools_with("schemas", &[]);
+        for tool in tools.tools() {
+            assert!(!tool.description.is_empty(), "{} has no description", tool.name);
+            assert_eq!(tool.input_schema["type"], "object", "{} schema is not an object", tool.name);
+        }
+    }
+
+    #[test]
+    fn single_vault_schemas_do_not_require_a_vault_argument() {
+        let tools = tools_with("optional-vault", &[]);
+        let read = tools.tools().into_iter().find(|t| t.name == "read_note").unwrap();
+        let required: Vec<&str> = read.input_schema["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(required, vec!["path"]);
+    }
+
+    #[test]
+    fn creates_and_reads_a_note() {
+        let mut tools = tools_with("create", &[]);
+        let created = call(&mut tools, "create_note", json!({
+            "path": "Projects/Alpha",
+            "content": "# Alpha\n\nLinks to [[Beta]].\n",
+            "tags": ["project"]
+        }));
+        assert_eq!(created["created"], "Projects/Alpha.md");
+
+        let read = call(&mut tools, "read_note", json!({"path": "Projects/Alpha"}));
+        assert_eq!(read["title"], "Alpha");
+        assert_eq!(read["tags"], json!(["project"]));
+        assert!(read["body"].as_str().unwrap().contains("[[Beta]]"));
+        assert_eq!(read["links"][0]["resolved_path"], Value::Null);
+    }
+
+    #[test]
+    fn create_refuses_to_overwrite() {
+        let mut tools = tools_with("no-clobber", &[("A.md", "# A\n")]);
+        assert!(tools.call("create_note", &json!({"path": "A.md"})).is_err());
+    }
+
+    #[test]
+    fn appends_under_a_heading() {
+        let mut tools = tools_with("append", &[("A.md", "# A\n\n## Tasks\n\n- one\n\n## Other\n")]);
+        call(&mut tools, "append_note", json!({"path": "A.md", "text": "- two", "heading": "Tasks"}));
+        let read = call(&mut tools, "read_note", json!({"path": "A.md"}));
+        let body = read["body"].as_str().unwrap();
+        assert!(body.find("- two").unwrap() < body.find("## Other").unwrap());
+    }
+
+    #[test]
+    fn search_reflects_writes_immediately() {
+        let mut tools = tools_with("fresh-search", &[]);
+        call(&mut tools, "create_note", json!({"path": "A", "content": "unmistakable-token\n"}));
+        let hits = call(&mut tools, "search_notes", json!({"query": "unmistakable-token"}));
+        assert_eq!(hits["count"], 1);
+        assert_eq!(hits["results"][0]["path"], "A.md");
+    }
+
+    #[test]
+    fn backlinks_and_unresolved_links_line_up() {
+        let mut tools = tools_with("graph", &[
+            ("Alpha.md", "# Alpha\n"),
+            ("Ref.md", "see [[Alpha]] and [[Ghost]]\n"),
+        ]);
+        let backlinks = call(&mut tools, "get_backlinks", json!({"path": "Alpha"}));
+        assert_eq!(backlinks["count"], 1);
+        assert_eq!(backlinks["backlinks"][0]["source"], "Ref.md");
+
+        let unresolved = call(&mut tools, "unresolved_links", json!({}));
+        assert_eq!(unresolved["total"], 1);
+        assert_eq!(unresolved["links"][0]["target"], "Ghost");
+    }
+
+    #[test]
+    fn moving_a_note_relinks_the_vault() {
+        let mut tools = tools_with("move", &[
+            ("Alpha.md", "# Alpha\n"),
+            ("Ref.md", "see [[Alpha]]\n"),
+        ]);
+        let moved = call(&mut tools, "move_note", json!({"from": "Alpha.md", "to": "Archive/Alpha One"}));
+        assert_eq!(moved["to"], "Archive/Alpha One.md");
+        assert_eq!(moved["notes_relinked"], json!(["Ref.md"]));
+
+        let ref_note = call(&mut tools, "read_note", json!({"path": "Ref.md"}));
+        assert!(ref_note["body"].as_str().unwrap().contains("[[Alpha One]]"));
+        assert_eq!(ref_note["links"][0]["resolved_path"], "Archive/Alpha One.md");
+    }
+
+    #[test]
+    fn frontmatter_updates_leave_the_body_alone() {
+        let mut tools = tools_with("fm", &[("A.md", "---\ntitle: A\nstatus: draft\n---\n\nBody text\n")]);
+        call(&mut tools, "update_frontmatter", json!({
+            "path": "A.md",
+            "set": {"status": "live"},
+            "remove": ["title"]
+        }));
+        let read = call(&mut tools, "read_note", json!({"path": "A.md"}));
+        assert_eq!(read["frontmatter"]["status"], "live");
+        assert!(read["frontmatter"].get("title").is_none());
+        assert!(read["body"].as_str().unwrap().contains("Body text"));
+    }
+
+    #[test]
+    fn paths_outside_the_vault_are_refused() {
+        let mut tools = tools_with("escape", &[]);
+        assert!(tools.call("read_note", &json!({"path": "../../etc/passwd"})).is_err());
+        assert!(tools.call("write_note", &json!({"path": "/etc/x", "content": "x"})).is_err());
+    }
+
+    #[test]
+    fn unknown_tools_are_reported() {
+        let mut tools = tools_with("unknown", &[]);
+        assert!(tools.call("nope", &json!({})).is_err());
+    }
+}

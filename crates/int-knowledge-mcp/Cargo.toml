@@ -1,0 +1,16 @@
+[package]
+name = "int-knowledge-mcp"
+description = "MCP server exposing an Intentio Knowledge vault to AI agents over stdio."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "int-knowledge-mcp"
+path = "src/main.rs"
+
+[dependencies]
+int-vault = { path = "../int-vault" }
+serde = { workspace = true }
+serde_json = { workspace = true }

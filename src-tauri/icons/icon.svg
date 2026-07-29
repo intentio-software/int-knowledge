@@ -1,0 +1,24 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#062a44"/>
+
+  <!-- Connections -->
+  <g stroke="#f05f36" stroke-width="6" stroke-linecap="round">
+    <line x1="256" y1="256" x2="256" y2="120"/>
+    <line x1="256" y1="256" x2="392" y2="256"/>
+    <line x1="256" y1="256" x2="256" y2="392"/>
+    <line x1="256" y1="256" x2="120" y2="256"/>
+  </g>
+
+  <!-- Nodes -->
+  <g fill="#ffffff" stroke="#f05f36" stroke-width="4">
+    <circle cx="256" cy="256" r="28"/>
+    <circle cx="256" cy="120" r="20"/>
+    <circle cx="392" cy="256" r="20"/>
+    <circle cx="256" cy="392" r="20"/>
+    <circle cx="120" cy="256" r="20"/>
+  </g>
+
+  <!-- Subtle inner highlight -->
+  <circle cx="256" cy="256" r="12" fill="#f05f36"/>
+</svg>
