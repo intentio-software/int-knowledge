@@ -19,6 +19,7 @@ import type MarkdownIt from "markdown-it";
 
 import { NoteDetail, NoteMeta } from "../models/vault.models";
 import { MAX_EMBED_DEPTH, createRenderer, renderMarkdown } from "../editor/markdown-renderer";
+import { PROPERTY_ICONS, Property, PropertyKind, buildProperties } from "../editor/properties";
 import { VaultService } from "../services/vault.service";
 
 /**
@@ -35,6 +36,56 @@ import { VaultService } from "../services/vault.service";
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="reader" #container (click)="onClick($event)">
+      <!-- Frontmatter, above the note the way Obsidian shows it. -->
+      <div class="properties" *ngIf="properties.length">
+        <div class="property" *ngFor="let property of properties">
+          <div class="property-key">
+            <i class="pi" [ngClass]="icon(property.kind)"></i>
+            <span>{{ property.key }}</span>
+          </div>
+          <div class="property-value">
+            <ng-container [ngSwitch]="property.kind">
+              <input
+                *ngSwitchCase="'checkbox'"
+                class="property-check"
+                type="checkbox"
+                disabled
+                [checked]="!!property.checked"
+              />
+
+              <ng-container *ngSwitchCase="'tags'">
+                <button
+                  type="button"
+                  class="pill tag"
+                  *ngFor="let value of property.values"
+                  (click)="tagSelected.emit(value.tag ?? value.text)"
+                >
+                  {{ value.text }}
+                </button>
+              </ng-container>
+
+              <ng-container *ngSwitchDefault>
+                <span class="empty" *ngIf="!property.values.length">—</span>
+                <ng-container *ngFor="let value of property.values; let last = last">
+                  <button
+                    type="button"
+                    class="property-link"
+                    *ngIf="value.link; else plain"
+                    (click)="linkFollowed.emit(value.link!)"
+                  >
+                    {{ value.text }}
+                  </button>
+                  <ng-template #plain>
+                    <span [class.pill]="property.kind === 'list'">{{ value.text }}</span>
+                  </ng-template>
+                  <span class="sep" *ngIf="property.kind !== 'list' && !last">, </span>
+                </ng-container>
+              </ng-container>
+            </ng-container>
+          </div>
+        </div>
+      </div>
+
       <article class="rendered" [innerHTML]="html"></article>
     </div>
   `,
@@ -50,6 +101,92 @@ import { VaultService } from "../services/vault.service";
         overflow-y: auto;
         padding: 1.75rem 0 40vh;
       }
+      /* ------------------------------------------------------- properties */
+      .properties {
+        max-width: 48rem;
+        margin: 0 auto 1.5rem;
+        padding: 0 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .property {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.75rem;
+        padding: 0.28rem 0.4rem;
+        border-radius: 6px;
+        font-size: 0.82rem;
+      }
+      .property:hover {
+        background: var(--hover);
+      }
+      /* A fixed key column keeps the values aligned down the list. */
+      .property-key {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        flex: none;
+        width: 9rem;
+        padding-top: 0.1rem;
+        color: var(--ink-faint);
+      }
+      .property-key i {
+        font-size: 0.7rem;
+        opacity: 0.7;
+      }
+      .property-key span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .property-value {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.3rem;
+        min-width: 0;
+        color: var(--ink);
+        user-select: text;
+      }
+      .property-value .empty {
+        color: var(--ink-faint);
+      }
+      .property-value .sep {
+        margin-right: 0.15rem;
+        color: var(--ink-faint);
+      }
+      .pill {
+        padding: 0.08rem 0.5rem;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--panel);
+        color: var(--ink-muted);
+        font-size: 0.75rem;
+      }
+      button.pill.tag {
+        cursor: pointer;
+        color: var(--accent);
+        border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+      }
+      button.pill.tag:hover {
+        background: color-mix(in srgb, var(--accent) 18%, transparent);
+      }
+      .property-link {
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: var(--accent);
+        font: inherit;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .property-check {
+        accent-color: var(--accent);
+      }
+
       .rendered {
         max-width: 48rem;
         margin: 0 auto;
@@ -276,10 +413,20 @@ export class MarkdownViewComponent implements OnChanges {
 
   html: SafeHtml = "";
 
+  /** Frontmatter rows shown above the note. */
+  properties: Property[] = [];
+
   ngOnChanges(changes: SimpleChanges): void {
+    if (changes["note"]) {
+      this.properties = buildProperties(this.note?.frontmatter);
+    }
     if (changes["note"] || changes["allNotes"] || changes["vaultRoot"]) {
       void this.render();
     }
+  }
+
+  icon(kind: PropertyKind): string {
+    return PROPERTY_ICONS[kind];
   }
 
   /** Route clicks on rendered links without binding a listener per anchor. */
