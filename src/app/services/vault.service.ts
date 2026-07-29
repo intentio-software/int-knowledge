@@ -66,8 +66,13 @@ export class VaultService {
   /** Paths this app wrote recently, with the time they were written. */
   private readonly selfWrites = new Map<string, number>();
 
-  /** Notes grouped into a flat, ordered folder tree for the sidebar. */
-  readonly tree = computed<TreeEntry[]>(() => buildTree(this.notes()));
+  /**
+   * Notes grouped into a flat, ordered folder tree for the sidebar.
+   *
+   * Folders come from the vault summary as well as from note paths, so one the
+   * user just made — and has not put anything in yet — still shows up.
+   */
+  readonly tree = computed<TreeEntry[]>(() => buildTree(this.notes(), this.vault()?.folders ?? []));
 
   readonly backlinks = computed<Backlink[]>(() => this.activeNote()?.backlinks ?? []);
 
@@ -256,6 +261,74 @@ export class VaultService {
     });
   }
 
+  async createFolder(path: string): Promise<string | null> {
+    const root = this.requireRoot();
+    return this.guard(async () => {
+      const created = await invoke<string>("create_folder", { root, path });
+      await this.refreshNotes();
+      return created;
+    });
+  }
+
+  /**
+   * Move or rename a folder, with the notes inside it.
+   *
+   * The open note may be one of them, so it is reopened at its new path rather
+   * than left pointing at a file that no longer exists.
+   */
+  async moveFolder(from: string, to: string): Promise<string | null> {
+    const root = this.requireRoot();
+    if (!to || to === from) {
+      return null;
+    }
+    return this.guard(async () => {
+      const moved = await invoke<string>("move_folder", { root, from, to, updateLinks: true });
+      const active = this.activeNote()?.path;
+      await this.refreshNotes();
+      if (active?.startsWith(`${from}/`)) {
+        await this.openNote(`${moved}${active.slice(from.length)}`);
+      }
+      return moved;
+    });
+  }
+
+  async deleteFolder(path: string): Promise<void> {
+    const root = this.requireRoot();
+    await this.guard(async () => {
+      await invoke<string>("delete_folder", { root, path });
+      if (this.activeNote()?.path.startsWith(`${path}/`)) {
+        this.activeNote.set(null);
+      }
+      await this.refreshNotes();
+    });
+  }
+
+  /** Notes inside a folder, at any depth — used to warn before deleting. */
+  async notesInFolder(path: string): Promise<string[]> {
+    const root = this.requireRoot();
+    try {
+      return await invoke<string[]>("notes_in_folder", { root, path });
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Move a note into a folder, keeping its filename.
+   *
+   * Passing "" moves it to the vault root. Returns null when the note is already
+   * where it was dropped, so callers can stay quiet rather than flashing a
+   * "moved" message for a move that did not happen.
+   */
+  async moveNoteToFolder(path: string, folder: string): Promise<string | null> {
+    const fileName = path.split("/").pop() ?? path;
+    const target = folder ? `${folder}/${fileName}` : fileName;
+    if (target === path) {
+      return null;
+    }
+    return this.renameNote(path, target);
+  }
+
   async renameNote(from: string, to: string): Promise<string | null> {
     const root = this.requireRoot();
     return this.guard(async () => {
@@ -401,8 +474,12 @@ function writeStorage(key: string, value: string | null): void {
  *
  * Folders come before notes at each level and both are sorted by name, so the
  * sidebar order is stable no matter what order the backend listed files in.
+ *
+ * `folders` lists directories that exist on disk. Passing them in is what keeps
+ * an empty folder visible: everything else here is derived from note paths, so
+ * a folder with nothing in it would otherwise leave no trace.
  */
-export function buildTree(notes: NoteMeta[]): TreeEntry[] {
+export function buildTree(notes: NoteMeta[], folders: string[] = []): TreeEntry[] {
   interface Folder {
     name: string;
     path: string;
@@ -412,9 +489,8 @@ export function buildTree(notes: NoteMeta[]): TreeEntry[] {
 
   const root: Folder = { name: "", path: "", folders: new Map(), notes: [] };
 
-  for (const note of notes) {
-    const segments = note.path.split("/");
-    const fileName = segments.pop() ?? note.path;
+  /** Walk to a folder, creating each level that is missing on the way down. */
+  const descend = (segments: string[]): Folder => {
     let current = root;
     let walked = "";
     for (const segment of segments) {
@@ -426,7 +502,20 @@ export function buildTree(notes: NoteMeta[]): TreeEntry[] {
       }
       current = next;
     }
-    current.notes.push({ ...note, title: note.title || fileName });
+    return current;
+  };
+
+  for (const folder of folders) {
+    const segments = folder.split("/").filter(Boolean);
+    if (segments.length) {
+      descend(segments);
+    }
+  }
+
+  for (const note of notes) {
+    const segments = note.path.split("/");
+    const fileName = segments.pop() ?? note.path;
+    descend(segments).notes.push({ ...note, title: note.title || fileName });
   }
 
   const entries: TreeEntry[] = [];
