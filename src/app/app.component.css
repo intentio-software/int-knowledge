@@ -182,13 +182,22 @@ button.icon.on {
 
 /* ----------------------------------------------------------------- panels */
 
+/* The pane itself does not scroll — an inner element does — so the resize
+   handle can be positioned against its edge and stay there. */
 .sidebar {
   grid-area: sidebar;
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--border);
   background: var(--panel);
+  overflow: hidden;
+}
+
+.sidebar-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -197,6 +206,10 @@ button.icon.on {
   align-items: center;
   gap: 0.45rem;
   padding: 0.9rem 1rem 0.5rem;
+}
+
+.sidebar-head button.icon {
+  margin-left: auto;
 }
 
 .heading {
@@ -217,10 +230,69 @@ button.icon.on {
 
 .context {
   grid-area: context;
+  position: relative;
   min-height: 0;
   border-left: 1px solid var(--border);
   background: var(--panel);
   overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- resizers */
+
+/* A hit area wider than the visible border, straddling the pane edge so the
+   cursor changes slightly before it reaches the line. */
+.resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* Kept inside the pane: it has overflow:hidden, so anything hanging past the
+   edge would be clipped away. */
+.resizer.right {
+  right: 0;
+}
+
+.resizer.left {
+  left: 0;
+}
+
+/* The line that lights up under the cursor sits on the pane's own edge. */
+.resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.resizer.right::after {
+  right: 0;
+}
+
+.resizer.left::after {
+  left: 0;
+}
+
+.resizer:hover::after {
+  background: var(--accent);
+}
+
+/* While dragging, keep the highlight and stop the pointer selecting text or
+   changing shape as it passes over the panes. */
+.shell.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.shell.resizing .resizer::after {
+  background: var(--accent);
 }
 
 .content {
@@ -232,17 +304,26 @@ button.icon.on {
   background: var(--surface);
 }
 
+/* Two rows: title + view toggle above, filename + actions below. Splitting them
+   keeps the title readable however long the filename gets. */
 .note-head {
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1rem 2rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.head-title {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1.1rem 2rem 0.6rem;
-  border-bottom: 1px solid var(--border);
 }
 
 .note-head h1 {
   margin: 0;
+  min-width: 0;
   font-size: 1.15rem;
   font-weight: 600;
   color: var(--ink-strong);
@@ -251,18 +332,27 @@ button.icon.on {
   white-space: nowrap;
 }
 
-.note-actions {
+.head-title .mode-switch {
+  flex: none;
+  margin-right: 0;
+}
+
+.head-meta {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  flex: none;
+  min-width: 0;
 }
 
-.note-actions .path {
+.head-meta .path {
+  flex: 1;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--ink-faint);
-  margin-right: 0.35rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .blank {

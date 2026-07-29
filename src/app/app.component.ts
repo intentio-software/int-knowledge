@@ -17,11 +17,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { AboutDialogComponent } from "./components/about-dialog.component";
 import { CommandPaletteComponent, PaletteMode } from "./components/command-palette.component";
+import { ContextMenuComponent, MenuItem } from "./components/context-menu.component";
 import { ContextPanelComponent } from "./components/context-panel.component";
 import { GraphViewComponent } from "./components/graph-view.component";
 import { MarkdownViewComponent } from "./components/markdown-view.component";
 import { NoteEditorComponent } from "./components/note-editor.component";
-import { NoteTreeComponent } from "./components/note-tree.component";
+import { NoteTreeComponent, TreeContextEvent } from "./components/note-tree.component";
 import { PromptDialogComponent } from "./components/prompt-dialog.component";
 import { VaultLauncherComponent } from "./components/vault-launcher.component";
 import { GraphData, Heading, ResolvedLink, SearchHit } from "./models/vault.models";
@@ -29,7 +30,17 @@ import { GraphData, Heading, ResolvedLink, SearchHit } from "./models/vault.mode
 /** Read mode is the default; source mode is the toggle. */
 export type ViewMode = "read" | "source";
 
+/** The two panes flanking the note, either of which can be dragged wider. */
+export type Pane = "sidebar" | "context";
+
 const VIEW_MODE_KEY = "intentio-knowledge:view-mode";
+const PANE_WIDTH_KEY = "intentio-knowledge:pane-widths";
+
+/** Defaults match the CSS the layout shipped with: 15rem and 17rem. */
+const DEFAULT_WIDTHS: Record<Pane, number> = { sidebar: 240, context: 272 };
+const MIN_PANE = 160;
+/** Neither pane may take so much room that the note has nowhere to go. */
+const MAX_PANE_FRACTION = 0.4;
 import { ThemeService } from "./services/theme.service";
 import { UpdaterService } from "./services/updater.service";
 import { VaultService } from "./services/vault.service";
@@ -47,6 +58,7 @@ import { VaultService } from "./services/vault.service";
     CommonModule,
     AboutDialogComponent,
     CommandPaletteComponent,
+    ContextMenuComponent,
     ContextPanelComponent,
     GraphViewComponent,
     MarkdownViewComponent,
@@ -67,10 +79,38 @@ export class AppComponent implements OnInit, OnDestroy {
 
   readonly paletteMode = signal<PaletteMode | null>(null);
   readonly renaming = signal<string | null>(null);
+  readonly renamingFolder = signal<string | null>(null);
+  readonly newFolder = signal(false);
+  readonly newFolderSeed = signal("");
+  /** Folder a note created from the palette should land in, "" for the root. */
+  readonly newNoteSeed = signal("");
+  /** The open explorer context menu, with what it was opened on. */
+  readonly contextMenu = signal<{ items: MenuItem[]; x: number; y: number; target: TreeContextEvent } | null>(null);
   readonly searchHits = signal<SearchHit[]>([]);
   readonly sidebarOpen = signal(true);
   readonly contextOpen = signal(true);
   readonly status = signal<string | null>(null);
+
+  /** Pane widths in pixels, restored from the last session. */
+  readonly paneWidth = signal<Record<Pane, number>>(this.loadPaneWidths());
+  /** Which pane is being dragged, if any. */
+  readonly resizing = signal<Pane | null>(null);
+
+  /**
+   * Column track sizes for the shell grid.
+   *
+   * Written inline so it overrides the class-based fallbacks in CSS, which still
+   * own the grid areas for each combination of open panes.
+   */
+  readonly gridColumns = computed(() => {
+    const widths = this.paneWidth();
+    const tracks = [
+      this.sidebarOpen() ? `${widths.sidebar}px` : null,
+      "minmax(0, 1fr)",
+      this.contextOpen() ? `${widths.context}px` : null
+    ];
+    return tracks.filter(Boolean).join(" ");
+  });
 
   /** Rendered markdown by default; source is the toggle. */
   readonly viewMode = signal<ViewMode>(this.loadViewMode());
@@ -307,7 +347,12 @@ export class AppComponent implements OnInit, OnDestroy {
    */
   async createNote(name: string): Promise<void> {
     const from = this.activePath() ?? "";
-    const path = this.uniquePath(this.vaultService.pathForNewNote(from, name));
+    // "New note here" asked for a specific folder; a name typed with its own
+    // path still wins, since that is the more explicit instruction.
+    const seed = this.newNoteSeed();
+    this.newNoteSeed.set("");
+    const target = seed && !name.includes("/") ? `${seed}${name}` : name;
+    const path = this.uniquePath(this.vaultService.pathForNewNote(from, target));
     const title = path.replace(/\.md$/i, "").split("/").pop() ?? name;
     const created = await this.vaultService.createNote(path, `# ${title}\n\n`);
     this.closePalette();
@@ -362,6 +407,96 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // folders
+  // -------------------------------------------------------------------------
+
+  /**
+   * Ask for a new folder name, seeded with the open note's folder so nesting
+   * one inside the folder you are already looking at takes no typing.
+   */
+  startNewFolder(): void {
+    const active = this.activePath() ?? "";
+    const slash = active.lastIndexOf("/");
+    const parent = slash === -1 ? "" : active.slice(0, slash);
+    this.newFolderSeed.set(parent ? `${parent}/` : "");
+    this.newFolder.set(true);
+  }
+
+  async confirmNewFolder(path: string): Promise<void> {
+    this.newFolder.set(false);
+    const clean = path.trim().replace(/^\/+|\/+$/g, "");
+    if (!clean) {
+      return;
+    }
+    const created = await this.vaultService.createFolder(clean);
+    if (created) {
+      this.flash(`Created ${created}`);
+    }
+  }
+
+  /** A note was dragged onto a folder in the sidebar. */
+  async moveNote(event: { path: string; folder: string }): Promise<void> {
+    this.editor?.flushPendingSave();
+    const moved = await this.vaultService.moveNoteToFolder(event.path, event.folder);
+    if (moved) {
+      this.flash(`Moved to ${moved}`);
+    }
+  }
+
+  /** A folder was dragged onto another folder, or onto the vault root. */
+  async moveFolder(event: { path: string; folder: string }): Promise<void> {
+    const name = event.path.split("/").pop() ?? event.path;
+    const target = event.folder ? `${event.folder}/${name}` : name;
+    this.editor?.flushPendingSave();
+    const moved = await this.vaultService.moveFolder(event.path, target);
+    if (moved) {
+      this.flash(`Moved to ${moved}`);
+    }
+  }
+
+  startFolderRename(path: string): void {
+    this.renamingFolder.set(path);
+  }
+
+  async confirmFolderRename(next: string): Promise<void> {
+    const path = this.renamingFolder();
+    this.renamingFolder.set(null);
+    const clean = next.trim().replace(/^\/+|\/+$/g, "");
+    if (!path || !clean || clean === path) {
+      return;
+    }
+    this.editor?.flushPendingSave();
+    const moved = await this.vaultService.moveFolder(path, clean);
+    if (moved) {
+      this.flash(`Moved to ${moved}`);
+    }
+  }
+
+  /**
+   * Delete a folder and everything inside it.
+   *
+   * The count comes from the backend rather than the loaded note list so the
+   * warning covers what is actually on disk, including anything the sidebar has
+   * not caught up with.
+   */
+  async deleteFolder(path: string): Promise<void> {
+    const notes = await this.vaultService.notesInFolder(path);
+    const summary = notes.length === 1 ? "1 note" : `${notes.length} notes`;
+    const confirmed = await ask(
+      `Delete ${path} and the ${summary} inside it?\n\nThis cannot be undone from here.`,
+      { title: "Delete folder", kind: "warning" }
+    );
+    if (!confirmed) {
+      return;
+    }
+    await this.vaultService.deleteFolder(path);
+    this.flash(`Deleted ${path}`);
+    if (!this.vaultService.activeNote()) {
+      await this.openFirstNote();
+    }
+  }
+
   async confirmRename(next: string): Promise<void> {
     const path = this.renaming();
     this.renaming.set(null);
@@ -399,6 +534,93 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   // -------------------------------------------------------------------------
+  // explorer context menu
+  // -------------------------------------------------------------------------
+
+  openContextMenu(event: TreeContextEvent): void {
+    this.contextMenu.set({ items: this.menuFor(event), x: event.x, y: event.y, target: event });
+  }
+
+  private menuFor(event: TreeContextEvent): MenuItem[] {
+    if (event.kind === "note") {
+      return [
+        { action: "open", label: "Open", icon: "pi-file" },
+        { separator: true },
+        { action: "rename-note", label: "Rename or move…", icon: "pi-pencil" },
+        { action: "delete-note", label: "Delete note", icon: "pi-trash", danger: true }
+      ];
+    }
+    if (event.kind === "folder") {
+      return [
+        { action: "new-note", label: "New note here", icon: "pi-file-plus" },
+        { action: "new-folder", label: "New folder inside", icon: "pi-folder" },
+        { separator: true },
+        { action: "rename-folder", label: "Rename or move…", icon: "pi-pencil" },
+        { action: "delete-folder", label: "Delete folder", icon: "pi-trash", danger: true }
+      ];
+    }
+    return [
+      { action: "new-note", label: "New note", icon: "pi-file-plus" },
+      { action: "new-folder", label: "New folder", icon: "pi-folder" }
+    ];
+  }
+
+  async runContextAction(action: string): Promise<void> {
+    const menu = this.contextMenu();
+    this.contextMenu.set(null);
+    if (!menu) {
+      return;
+    }
+    const { kind, path } = menu.target;
+    // For a note the folder is the one it sits in; for a folder it is itself.
+    const folder = kind === "note" ? (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "") : path;
+
+    switch (action) {
+      case "open":
+        await this.openNote(path);
+        return;
+      case "rename-note":
+        this.renaming.set(path);
+        return;
+      case "delete-note":
+        await this.deleteNoteAt(path);
+        return;
+      case "new-note":
+        // Seeded with the folder so the note is created where it was asked for.
+        this.newNoteSeed.set(folder ? `${folder}/` : "");
+        this.openPalette("jump");
+        return;
+      case "new-folder":
+        this.newFolderSeed.set(folder ? `${folder}/` : "");
+        this.newFolder.set(true);
+        return;
+      case "rename-folder":
+        this.startFolderRename(path);
+        return;
+      case "delete-folder":
+        await this.deleteFolder(path);
+        return;
+    }
+  }
+
+  /** Delete any note, not only the open one. */
+  private async deleteNoteAt(path: string): Promise<void> {
+    const confirmed = await ask(`Delete ${path}?\n\nThis cannot be undone from here.`, {
+      title: "Delete note",
+      kind: "warning"
+    });
+    if (!confirmed) {
+      return;
+    }
+    const wasActive = this.activePath() === path;
+    await this.vaultService.deleteNote(path);
+    this.flash(`Deleted ${path}`);
+    if (wasActive) {
+      await this.openFirstNote();
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // palette
   // -------------------------------------------------------------------------
 
@@ -409,6 +631,8 @@ export class AppComponent implements OnInit, OnDestroy {
 
   closePalette(): void {
     this.paletteMode.set(null);
+    // Dismissing the palette abandons the "new note here" folder with it.
+    this.newNoteSeed.set("");
   }
 
   async onPaletteQuery(query: string): Promise<void> {
@@ -499,8 +723,87 @@ export class AppComponent implements OnInit, OnDestroy {
     this.contextOpen.update((open) => !open);
   }
 
+  // -------------------------------------------------------------------------
+  // resizing
+  // -------------------------------------------------------------------------
+
+  /**
+   * Begin a pane drag.
+   *
+   * The pointer is captured so the drag survives the cursor leaving the thin
+   * handle, which is otherwise very easy to do.
+   */
+  startResize(event: PointerEvent, pane: Pane): void {
+    event.preventDefault();
+    const handle = event.target as HTMLElement;
+    handle.setPointerCapture?.(event.pointerId);
+    this.resizing.set(pane);
+
+    const startX = event.clientX;
+    const startWidth = this.paneWidth()[pane];
+
+    const onMove = (move: PointerEvent): void => {
+      // The sidebar grows as the pointer moves right; the right-hand panel
+      // grows as it moves left.
+      const delta = pane === "sidebar" ? move.clientX - startX : startX - move.clientX;
+      this.setPaneWidth(pane, startWidth + delta);
+    };
+
+    const onUp = (): void => {
+      handle.releasePointerCapture?.(event.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      this.resizing.set(null);
+      this.savePaneWidths();
+    };
+
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
+
+  resetPane(pane: Pane): void {
+    this.setPaneWidth(pane, DEFAULT_WIDTHS[pane]);
+    this.savePaneWidths();
+  }
+
+  private setPaneWidth(pane: Pane, width: number): void {
+    const max = Math.max(MIN_PANE, window.innerWidth * MAX_PANE_FRACTION);
+    const clamped = Math.round(Math.min(max, Math.max(MIN_PANE, width)));
+    this.paneWidth.update((current) => ({ ...current, [pane]: clamped }));
+  }
+
+  private loadPaneWidths(): Record<Pane, number> {
+    try {
+      const raw = window.localStorage.getItem(PANE_WIDTH_KEY);
+      if (!raw) {
+        return { ...DEFAULT_WIDTHS };
+      }
+      const parsed = JSON.parse(raw) as Partial<Record<Pane, number>>;
+      const pick = (pane: Pane): number =>
+        typeof parsed[pane] === "number" && Number.isFinite(parsed[pane]) ? (parsed[pane] as number) : DEFAULT_WIDTHS[pane];
+      return { sidebar: pick("sidebar"), context: pick("context") };
+    } catch {
+      return { ...DEFAULT_WIDTHS };
+    }
+  }
+
+  private savePaneWidths(): void {
+    try {
+      window.localStorage.setItem(PANE_WIDTH_KEY, JSON.stringify(this.paneWidth()));
+    } catch {
+      // Losing the widths only costs the layout on next launch.
+    }
+  }
+
   @HostListener("window:keydown", ["$event"])
   handleShortcut(event: KeyboardEvent): void {
+    if (event.key === "Escape" && this.contextMenu()) {
+      event.preventDefault();
+      this.contextMenu.set(null);
+      return;
+    }
     if (event.key === "Escape" && this.aboutOpen()) {
       event.preventDefault();
       this.aboutOpen.set(false);

@@ -1,5 +1,7 @@
 import { createRenderer, renderMarkdown, sectionOf } from "../src/app/editor/markdown-renderer";
 import { ForceGraph } from "../src/app/editor/force-graph";
+import { buildProperties } from "../src/app/editor/properties";
+import { buildTree } from "../src/app/services/vault.service";
 
 const md = createRenderer();
 const existing = new Set(["Welcome.md", "Ideas.md", "logo.png"]);
@@ -128,6 +130,42 @@ check("graph does not collapse or explode", spread > 100 && spread < 20000 ? "ok
 const before = graph.nodes[10].x;
 graph.load([...nodes, { id: "new", label: "New", exists: true, degree: 0 }], edges);
 check("reload keeps positions", graph.nodes[10].x === before ? "ok" : "moved", "ok");
+
+// --- frontmatter properties ------------------------------------------------
+const props = (fm: Record<string, unknown>) => JSON.stringify(buildProperties(fm));
+
+check("string property is text", props({ status: "draft" }), '"kind":"text"');
+check("number property", props({ order: 3 }), '"kind":"number"');
+check("boolean property is a checkbox", props({ done: true }), '"kind":"checkbox","values":[{"text":"true"}],"checked":true');
+check("array property is a list", props({ authors: ["ann", "bo"] }), '"kind":"list"');
+check("tags key yields tags", props({ tags: ["one", "two"] }), '"kind":"tags"');
+check("tag values keep a hash for display", props({ tags: ["one"] }), '"text":"#one","tag":"one"');
+check("existing hash is not doubled", props({ tags: ["#one"] }), '"text":"#one"');
+check("inline tag string splits", props({ tags: "one, two" }), '"text":"#two"');
+check("date is detected", props({ created: "2026-07-29" }), '"kind":"date"');
+check("datetime is detected", props({ created: "2026-07-29T10:00" }), '"kind":"date"');
+check("date-like prose is not a date", props({ note: "2026 was busy" }), '"kind":"text"');
+check("wikilink property is a link", props({ parent: "[[Index]]" }), '"kind":"link"');
+check("wikilink alias is displayed", props({ parent: "[[Index|Home]]" }), '"text":"Home","link":"Index"');
+check("null property keeps its row", props({ empty: null }), '"key":"empty","kind":"text","values":[]');
+check("nested map does not vanish", props({ meta: { a: 1 } }), '"kind":"text"');
+check("property order follows the file", props({ b: 1, a: 2 }), '[{"key":"b"');
+check("no frontmatter yields no rows", JSON.stringify(buildProperties(undefined)), "[]");
+
+// --- sidebar tree ----------------------------------------------------------
+const note = (path: string) => ({ path, title: path.split("/").pop()!.replace(/\.md$/, ""), size: 0 });
+const tree = (notes: string[], folders: string[] = []) =>
+  buildTree(notes.map(note), folders).map((e) => `${e.kind}:${e.path}@${e.depth}`);
+
+check("notes nest under their folder", tree(["Projects/Alpha.md"]).join("|"), "folder:Projects@0|note:Projects/Alpha.md@1");
+check("empty folder still appears", tree([], ["Ideas"]).join("|"), "folder:Ideas@0");
+check("nested empty folder appears", tree([], ["a/b"]).join("|"), "folder:a@0|folder:a/b@1");
+check(
+  "folder listed and implied is not duplicated",
+  tree(["Projects/Alpha.md"], ["Projects"]).filter((e) => e.startsWith("folder:")).length === 1 ? "ok" : "duplicated",
+  "ok"
+);
+check("folders sort before notes", tree(["Zed.md", "Aa/Inner.md"]).join("|"), "folder:Aa@0|note:Aa/Inner.md@1|note:Zed.md@0");
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

@@ -7,7 +7,13 @@
     (recentChosen)="openRecent($event)"
   ></app-vault-launcher>
 } @else {
-  <div class="shell" [class.no-sidebar]="!sidebarOpen()" [class.no-context]="!contextOpen()">
+  <div
+    class="shell"
+    [class.no-sidebar]="!sidebarOpen()"
+    [class.no-context]="!contextOpen()"
+    [class.resizing]="resizing() !== null"
+    [style.gridTemplateColumns]="gridColumns()"
+  >
     <header class="titlebar">
       <div class="left">
         <button type="button" class="icon" title="Toggle sidebar (⌘B)" (click)="toggleSidebar()">
@@ -59,23 +65,42 @@
       <div class="sidebar-head">
         <span class="heading">Notes</span>
         <span class="badge">{{ vaultService.notes().length }}</span>
+        <button type="button" class="icon small" title="New folder" (click)="startNewFolder()">
+          <i class="pi pi-folder-open"></i>
+        </button>
       </div>
-      <app-note-tree
-        [entries]="vaultService.tree()"
-        [activePath]="activePath()"
-        (noteSelected)="openNote($event)"
-      ></app-note-tree>
+      <div class="sidebar-body">
+        <app-note-tree
+          [entries]="vaultService.tree()"
+          [activePath]="activePath()"
+          (noteSelected)="openNote($event)"
+          (noteMoved)="moveNote($event)"
+          (folderMoved)="moveFolder($event)"
+          (contextRequested)="openContextMenu($event)"
+        ></app-note-tree>
+      </div>
+      <div
+        class="resizer right"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        title="Drag to resize · double-click to reset"
+        (pointerdown)="startResize($event, 'sidebar')"
+        (dblclick)="resetPane('sidebar')"
+      ></div>
     </aside>
 
     <main class="content">
       @if (graphOpen()) {
         <div class="note-head">
-          <h1>Graph</h1>
-          <div class="note-actions">
-            <span class="path">every note and link in {{ vaultService.vault()?.name }}</span>
+          <div class="head-title">
+            <h1>Graph</h1>
             <button type="button" class="icon small" title="Back to note (⌘G)" (click)="toggleGraph()">
               <i class="pi pi-times"></i>
             </button>
+          </div>
+          <div class="head-meta">
+            <span class="path">every note and link in {{ vaultService.vault()?.name }}</span>
           </div>
         </div>
         <app-graph-view
@@ -85,9 +110,12 @@
           (noteCreateRequested)="createFromGraph($event)"
         ></app-graph-view>
       } @else if (vaultService.activeNote(); as note) {
+        <!-- Title and view toggle hold the top line; the filename and the
+             destructive actions drop to a second line, so a long note name
+             can never push the title out of view. -->
         <div class="note-head">
-          <h1>{{ note.title }}</h1>
-          <div class="note-actions">
+          <div class="head-title">
+            <h1>{{ note.title }}</h1>
             <div class="mode-switch" role="group" aria-label="View mode">
               <button
                 type="button"
@@ -106,7 +134,9 @@
                 Source
               </button>
             </div>
-            <span class="path">{{ note.path }}</span>
+          </div>
+          <div class="head-meta">
+            <span class="path" [title]="note.path">{{ note.path }}</span>
             <button type="button" class="icon small" title="Rename or move" (click)="startRename()">
               <i class="pi pi-pencil"></i>
             </button>
@@ -143,6 +173,15 @@
     </main>
 
     <aside class="context" *ngIf="contextOpen()">
+      <div
+        class="resizer left"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize side panel"
+        title="Drag to resize · double-click to reset"
+        (pointerdown)="startResize($event, 'context')"
+        (dblclick)="resetPane('context')"
+      ></div>
       <app-context-panel
         [note]="vaultService.activeNote()"
         (noteOpened)="openNote($event)"
@@ -181,6 +220,38 @@
       (noteCreateRequested)="createNote($event)"
       (dismissed)="closePalette()"
     ></app-command-palette>
+  }
+
+  @if (contextMenu(); as menu) {
+    <app-context-menu
+      [items]="menu.items"
+      [x]="menu.x"
+      [y]="menu.y"
+      (chosen)="runContextAction($event)"
+      (dismissed)="contextMenu.set(null)"
+    ></app-context-menu>
+  }
+
+  @if (renamingFolder(); as path) {
+    <app-prompt-dialog
+      title="Rename or move folder"
+      hint="A vault-relative path. Notes inside move with it and links are kept working."
+      confirmLabel="Move"
+      [initialValue]="path"
+      (confirmed)="confirmFolderRename($event)"
+      (cancelled)="renamingFolder.set(null)"
+    ></app-prompt-dialog>
+  }
+
+  @if (newFolder()) {
+    <app-prompt-dialog
+      title="New folder"
+      hint="A vault-relative path. Nested folders like Projects/Alpha are created in one go."
+      confirmLabel="Create"
+      [initialValue]="newFolderSeed()"
+      (confirmed)="confirmNewFolder($event)"
+      (cancelled)="newFolder.set(false)"
+    ></app-prompt-dialog>
   }
 
   @if (renaming(); as path) {
