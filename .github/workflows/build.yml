@@ -55,16 +55,51 @@ jobs:
 
       - run: npm ci
 
-      - name: Verify signing key is configured
+      # Both secrets are validated before anything is compiled. A malformed one
+      # otherwise surfaces only at the signing step, after a multi-minute build.
+      - name: Verify signing key is usable
         shell: bash
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set. Set it to the base64-encoded content of your .key file."
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. It must be the raw contents of your .tauri/*.key file."
             exit 1
           fi
-          echo "Signing key present (length: ${#TAURI_SIGNING_PRIVATE_KEY})"
+          # The .key file is already base64; decoding it once must yield the
+          # two-line signing key. Double-encoding it is the easy mistake, and it
+          # decodes to a single line of base64 instead.
+          decoded=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | base64 -d 2>/dev/null | head -1)
+          case "$decoded" in
+            *"secret key"*)
+              echo "Signing key decodes correctly." ;;
+            *)
+              echo "::error::TAURI_SIGNING_PRIVATE_KEY does not decode to a signing key. Use the raw contents of the .key file (already base64) — not 'base64' of that file, and with no trailing newline."
+              exit 1 ;;
+          esac
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Verify Apple certificate password
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No Apple certificate configured — the macOS build will be unsigned."
+            exit 0
+          fi
+          printf '%s' "$APPLE_CERTIFICATE" | base64 -d > /tmp/cert.p12 2>/dev/null || {
+            echo "::error::APPLE_CERTIFICATE is not valid base64. Use: base64 -i cert.p12 | tr -d '\n'"
+            exit 1
+          }
+          if ! openssl pkcs12 -in /tmp/cert.p12 -nokeys -passin pass:"$APPLE_CERTIFICATE_PASSWORD" -legacy >/dev/null 2>&1; then
+            rm -f /tmp/cert.p12
+            echo "::error::APPLE_CERTIFICATE_PASSWORD does not open APPLE_CERTIFICATE. Re-export the .p12 with a password you record, and set both secrets together."
+            exit 1
+          fi
+          rm -f /tmp/cert.p12
+          echo "Apple certificate and password match."
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Get or create draft release
         id: release
@@ -123,8 +158,17 @@ jobs:
 
       - name: Attach MCP server to release
         shell: bash
-        run: gh release upload ${{ steps.release.outputs.tag }} int-knowledge-mcp-*.tar.gz int-knowledge-mcp-*.zip --clobber
-        continue-on-error: true
+        # Only one archive exists per platform. Globbing both patterns at once
+        # makes the unmatched one expand to a literal filename, which fails the
+        # whole upload — so collect with nullglob and upload what is actually there.
+        run: |
+          shopt -s nullglob
+          files=(int-knowledge-mcp-*.tar.gz int-knowledge-mcp-*.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::warning::no MCP archive was produced on ${{ matrix.os }}"
+            exit 0
+          fi
+          gh release upload ${{ steps.release.outputs.tag }} "${files[@]}" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
