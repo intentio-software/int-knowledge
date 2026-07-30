@@ -1,3 +1,11 @@
+# [1.1.0](https://github.com/intentio-software/int-knowledge/compare/v1.0.0...v1.1.0) (2026-07-30)
+
+
+### Features
+
+* follow the app's open vault, and never block on evicted notes ([b61460c](https://github.com/intentio-software/int-knowledge/commit/b61460cee78b179d13a3ddc8d92f8c7a3b12247b))
+* **mcp:** targeted editing, folder operations and recoverable deletes ([c08753d](https://github.com/intentio-software/int-knowledge/commit/c08753d5e77d74afb0f7f6f89359d9cadf22ba29))
+
 # 1.0.0 (2026-07-30)
 
 
