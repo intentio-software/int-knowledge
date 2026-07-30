@@ -32,6 +32,12 @@ pub enum VaultError {
     #[error("heading not found: {0}")]
     HeadingNotFound(String),
 
+    /// The file exists but its contents are not on this machine — evicted to
+    /// iCloud or another cloud provider. Reading it would block until the
+    /// download finished, which may be never.
+    #[error("note is not downloaded to this machine: {0}")]
+    NotMaterialized(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

@@ -48,9 +48,21 @@ impl VaultEntry {
 
 pub struct Workspace {
     vaults: Vec<VaultEntry>,
+    /// When true, the vault is whichever one the desktop app has open, resolved
+    /// on every call rather than fixed at launch.
+    follow_app: bool,
 }
 
 impl Workspace {
+    /// Track whichever vault the desktop app currently has open.
+    ///
+    /// This is what makes the agent and the app agree without the user keeping
+    /// the path in two places. Resolution happens per call, so switching vaults
+    /// in the app switches the agent too, with no restart.
+    pub fn follow_app() -> Self {
+        Workspace { vaults: Vec::new(), follow_app: true }
+    }
+
     /// Open every configured root. Fails if any of them is unusable, so a typo
     /// in the client config surfaces at startup instead of mid-conversation.
     pub fn open(roots: &[PathBuf]) -> Result<Self, String> {
@@ -71,11 +83,17 @@ impl Workspace {
             return Err("vault folder names must be unique so tools can address them by name".into());
         }
 
-        Ok(Workspace { vaults })
+        Ok(Workspace { vaults, follow_app: false })
+    }
+
+    pub fn follows_app(&self) -> bool {
+        self.follow_app
     }
 
     pub fn is_single(&self) -> bool {
-        self.vaults.len() == 1
+        // In follow mode there is only ever one vault, so the `vault` argument
+        // stays optional even before the app has reported one.
+        self.follow_app || self.vaults.len() == 1
     }
 
     pub fn names(&self) -> Vec<String> {
@@ -91,6 +109,9 @@ impl Workspace {
     /// With a single vault configured the argument is optional; with several it
     /// is required, and the error names the valid choices.
     pub fn select(&mut self, requested: Option<&str>) -> Result<&mut VaultEntry, String> {
+        if self.follow_app {
+            self.sync_with_app()?;
+        }
         match requested {
             None => {
                 if self.vaults.len() == 1 {
@@ -118,6 +139,31 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Point at whatever vault the app has open, opening or swapping as needed.
+    ///
+    /// The error text is written for a model to act on: if no vault is open
+    /// there is nothing the agent can do except tell the user to open one.
+    fn sync_with_app(&mut self) -> Result<(), String> {
+        let Some(active) = int_vault::app_state::active_vault() else {
+            self.vaults.clear();
+            return Err(concat!(
+                "No vault is open. This server follows whichever vault Intentio Knowledge has open, ",
+                "and the app either is not running or has no vault open. Ask the user to open one, ",
+                "or configure the server with an explicit vault path."
+            )
+            .into());
+        };
+
+        // Already pointed at it — keep the entry so its cached index survives.
+        if self.vaults.first().map(|entry| entry.vault().root() == active.as_path()).unwrap_or(false) {
+            return Ok(());
+        }
+
+        let vault = Vault::open(&active).map_err(|err| format!("{}: {err}", active.display()))?;
+        self.vaults = vec![VaultEntry { vault, index: None, fingerprint: 0 }];
+        Ok(())
     }
 }
 
@@ -163,6 +209,53 @@ mod tests {
     #[test]
     fn missing_root_fails_at_startup() {
         assert!(Workspace::open(&[PathBuf::from("/definitely/not/here")]).is_err());
+    }
+
+    /// Follow mode is the default configuration, so its behaviour is pinned here:
+    /// no vault open is a clear error, and switching vaults in the app switches
+    /// the server without a restart.
+    #[test]
+    fn follows_whichever_vault_the_app_reports() {
+        let _guard = crate::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scratch = std::env::temp_dir().join(format!("int-ws-follow-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&scratch);
+        fs::create_dir_all(&scratch).unwrap();
+        std::env::set_var("HOME", &scratch);
+
+        let first = scratch.join("First");
+        let second = scratch.join("Second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("A.md"), "# A\n").unwrap();
+        fs::write(second.join("B.md"), "# B\n").unwrap();
+        fs::write(second.join("C.md"), "# C\n").unwrap();
+
+        let mut workspace = Workspace::follow_app();
+        assert!(workspace.follows_app());
+        // The `vault` argument stays optional even before a vault is reported.
+        assert!(workspace.is_single());
+
+        // Nothing open yet: the error has to tell the model what to do.
+        let err = workspace.select(None).unwrap_err();
+        assert!(err.contains("No vault is open"), "{err}");
+
+        int_vault::app_state::write_active_vault(Some(&first), 1).unwrap();
+        assert_eq!(workspace.select(None).unwrap().name(), "First");
+        assert_eq!(workspace.select(None).unwrap().index().len(), 1);
+
+        // The app switches vault — the server must follow, with no restart.
+        int_vault::app_state::write_active_vault(Some(&second), 2).unwrap();
+        assert_eq!(workspace.select(None).unwrap().name(), "Second");
+        assert_eq!(workspace.select(None).unwrap().index().len(), 2);
+
+        // The app closes its vault.
+        int_vault::app_state::write_active_vault(None, 3).unwrap();
+        assert!(workspace.select(None).is_err());
+
+        // A vault the app reported but which has since been deleted.
+        int_vault::app_state::write_active_vault(Some(&first), 4).unwrap();
+        fs::remove_dir_all(&first).unwrap();
+        assert!(workspace.select(None).is_err(), "a deleted vault must not resolve");
     }
 
     #[test]

@@ -22,6 +22,12 @@ impl VaultTools {
 
     /// Schema fragment for the shared `vault` selector.
     fn vault_property(&self) -> Value {
+        if self.workspace.follows_app() {
+            return json!({
+                "type": "string",
+                "description": "Not needed: this server always acts on whichever vault Intentio Knowledge currently has open."
+            });
+        }
         let names = self.workspace.names().join(", ");
         json!({
             "type": "string",
@@ -53,6 +59,9 @@ impl ToolProvider for VaultTools {
                 "Read and write an Intentio Knowledge vault — a folder of markdown notes on the user's ",
                 "filesystem, linked with [[wikilinks]].\n\n",
                 "Guidance:\n",
+                "- Unless configured with explicit paths, this server acts on whichever vault the ",
+                "desktop app currently has open, re-checked on every call. If a call reports that no ",
+                "vault is open, ask the user to open one in the app rather than guessing a path.\n",
                 "- Paths are vault-relative and forward-slashed, e.g. `Projects/Alpha.md`. The `.md` ",
                 "extension is added automatically when omitted.\n",
                 "- Prefer `search_notes` to find a note before reading it; prefer `append_note` over ",
@@ -215,6 +224,17 @@ impl ToolProvider for VaultTools {
 
     fn call(&mut self, name: &str, args: &Value) -> Result<ToolOutput, String> {
         if name == "list_vaults" {
+            let follows = self.workspace.follows_app();
+            // In follow mode the list is empty until the app is consulted.
+            if follows {
+                if let Err(message) = self.workspace.select(None) {
+                    return Ok(ToolOutput::json(&json!({
+                        "followsApp": true,
+                        "vaults": [],
+                        "note": message,
+                    })));
+                }
+            }
             let vaults: Vec<Value> = self
                 .workspace
                 .entries()
@@ -227,7 +247,7 @@ impl ToolProvider for VaultTools {
                     })
                 })
                 .collect();
-            return Ok(ToolOutput::json(&json!({ "vaults": vaults })));
+            return Ok(ToolOutput::json(&json!({ "followsApp": follows, "vaults": vaults })));
         }
 
         let selector = opt_str(args, "vault");
@@ -239,8 +259,9 @@ impl ToolProvider for VaultTools {
                 let root = entry.vault().root().to_string_lossy().to_string();
                 let folders = entry.vault().list_folders().len();
                 let attachments = entry.vault().list_attachments().len();
+                let unavailable = entry.vault().list_unavailable();
                 let index = entry.index();
-                Ok(ToolOutput::json(&json!({
+                let mut info = json!({
                     "name": vault_name,
                     "path": root,
                     "notes": index.len(),
@@ -248,7 +269,18 @@ impl ToolProvider for VaultTools {
                     "attachments": attachments,
                     "tags": index.tags().len(),
                     "unresolved_links": index.unresolved().len(),
-                })))
+                });
+                // Evicted notes are skipped everywhere else, so say so here
+                // rather than letting them look like notes that never existed.
+                if !unavailable.is_empty() {
+                    info["not_downloaded"] = json!(unavailable);
+                    info["note"] = json!(concat!(
+                        "Some notes are not downloaded to this machine (evicted to iCloud) and are ",
+                        "excluded from listing and search. Opening them in Finder or turning off ",
+                        "\"Optimise Mac Storage\" will download them."
+                    ));
+                }
+                Ok(ToolOutput::json(&info))
             }
 
             "list_notes" => {

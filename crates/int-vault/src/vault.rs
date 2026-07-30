@@ -147,6 +147,18 @@ impl Vault {
             .collect()
     }
 
+    /// Notes whose contents are not on this machine.
+    ///
+    /// These are skipped by listing, indexing and search, so surfacing them
+    /// matters: otherwise a note the user can see in Finder is silently missing
+    /// from the app with no explanation.
+    pub fn list_unavailable(&self) -> Vec<String> {
+        self.walk()
+            .filter(|path| is_note_path(path) && is_dataless(path))
+            .filter_map(|path| self.relative_of(&path))
+            .collect()
+    }
+
     /// Non-note files (images, PDFs, attachments), sorted by path.
     pub fn list_attachments(&self) -> Vec<String> {
         self.walk()
@@ -184,6 +196,7 @@ impl Vault {
         if !absolute.is_file() {
             return Err(VaultError::NoteNotFound(path));
         }
+        ensure_materialized(&absolute, &path)?;
         let content = fs::read_to_string(&absolute)?;
         let (size, modified) = stat(&absolute);
         Ok(Note::parse(&path, &content, size, modified))
@@ -206,6 +219,7 @@ impl Vault {
         if !absolute.is_file() {
             return Err(VaultError::NoteNotFound(path));
         }
+        ensure_materialized(&absolute, &path)?;
         Ok(fs::read_to_string(absolute)?)
     }
 
@@ -441,6 +455,41 @@ fn is_note_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a file's contents have been evicted to the cloud.
+///
+/// macOS marks iCloud-evicted files `SF_DATALESS`. Reading one asks the system to
+/// download it first, and that read blocks — indefinitely if sync is stalled or
+/// offline. A vault living under `~/Documents` with "Optimise Mac Storage" turned
+/// on will contain these routinely, so every read has to check first rather than
+/// discover it by hanging.
+#[cfg(target_os = "macos")]
+fn is_dataless(path: &Path) -> bool {
+    use std::os::macos::fs::MetadataExt;
+
+    /// `SF_DATALESS` from `<sys/stat.h>`.
+    const SF_DATALESS: u32 = 0x4000_0000;
+
+    // `symlink_metadata` avoids following a link into another dataless file.
+    fs::symlink_metadata(path)
+        .map(|meta| meta.st_flags() & SF_DATALESS != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_dataless(_path: &Path) -> bool {
+    // Other platforms surface cloud placeholders as ordinary files or as reparse
+    // points that fail fast, so there is nothing to pre-empt here.
+    false
+}
+
+/// Guard a read against blocking on an undownloaded file.
+fn ensure_materialized(path: &Path, relative: &str) -> Result<()> {
+    if is_dataless(path) {
+        return Err(VaultError::NotMaterialized(relative.to_string()));
+    }
+    Ok(())
+}
+
 fn stat(path: &Path) -> (u64, Option<u64>) {
     match fs::metadata(path) {
         Ok(meta) => {
@@ -609,6 +658,18 @@ mod tests {
         fs::write(vault.root().join(".obsidian/C.md"), "# C\n").unwrap();
         let paths: Vec<String> = vault.list_notes().into_iter().map(|n| n.path).collect();
         assert_eq!(paths, vec!["A.md", "sub/B.md"]);
+    }
+
+    #[test]
+    fn ordinary_files_are_not_treated_as_dataless() {
+        // A dataless file cannot be created in a test — only the OS sets
+        // SF_DATALESS — so this pins the negative case: normal notes must never
+        // be mistaken for evicted ones, which would make them silently vanish.
+        let vault = temp_vault("dataless");
+        vault.write_note("A.md", "# A\n").unwrap();
+        assert!(vault.list_unavailable().is_empty());
+        assert!(vault.read_note("A.md").is_ok());
+        assert_eq!(vault.list_notes().len(), 1);
     }
 
     #[test]

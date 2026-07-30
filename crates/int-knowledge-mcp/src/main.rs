@@ -11,6 +11,14 @@ mod mcp;
 mod tools;
 mod workspace;
 
+/// Serializes tests that reassign `HOME`.
+///
+/// `HOME` is process-global and these tests share a binary, so both the
+/// argument-expansion test and the follow-the-app test need to take turns —
+/// otherwise they race and fail intermittently.
+#[cfg(test)]
+pub(crate) static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -25,6 +33,8 @@ USAGE:
 
 ARGS:
     <VAULT_PATH>...    One or more vault folders. Each must already exist.
+                       Omit entirely to follow whichever vault the desktop app
+                       has open, re-checked on every call.
 
 OPTIONS:
     --vault <PATH>     Add a vault (repeatable; same as a positional path)
@@ -36,7 +46,11 @@ ENVIRONMENT:
 
 The server speaks MCP over stdio. Register it with an agent, for example:
 
-    claude mcp add knowledge -- int-knowledge-mcp ~/Notes
+    # follow whatever the app has open (recommended)
+    claude mcp add knowledge -- int-knowledge-mcp
+
+    # or pin it to specific folders
+    claude mcp add knowledge -- int-knowledge-mcp ~/Notes ~/TeamVault
 ";
 
 fn main() -> ExitCode {
@@ -52,16 +66,29 @@ fn main() -> ExitCode {
         }
     };
 
-    let workspace = match Workspace::open(&roots) {
-        Ok(workspace) => workspace,
-        Err(message) => {
-            eprintln!("error: {message}");
-            return ExitCode::FAILURE;
+    // No path configured means "follow the app", which is the friendlier default:
+    // the user opens a vault once, in the app, rather than maintaining the path
+    // in the client config as well.
+    let workspace = if roots.is_empty() {
+        eprintln!("[knowledge] no vault given — following whichever vault the app has open");
+        Workspace::follow_app()
+    } else {
+        match Workspace::open(&roots) {
+            Ok(workspace) => {
+                // Startup diagnostics go to stderr; stdout carries protocol only.
+                eprintln!(
+                    "[knowledge] serving {} vault(s): {}",
+                    roots.len(),
+                    workspace.names().join(", ")
+                );
+                workspace
+            }
+            Err(message) => {
+                eprintln!("error: {message}");
+                return ExitCode::FAILURE;
+            }
         }
     };
-
-    // Startup diagnostics go to stderr; stdout carries protocol traffic only.
-    eprintln!("[knowledge] serving {} vault(s): {}", roots.len(), workspace.names().join(", "));
 
     match mcp::serve(VaultTools::new(workspace)) {
         Ok(()) => ExitCode::SUCCESS,
@@ -109,9 +136,7 @@ fn parse_args(args: &[String]) -> Result<Option<Vec<PathBuf>>, String> {
         }
     }
 
-    if roots.is_empty() {
-        return Err("no vault given".into());
-    }
+    // An empty list is valid: it means follow the app's open vault.
     Ok(Some(roots))
 }
 
@@ -144,11 +169,18 @@ mod tests {
     fn rejects_unknown_options_and_missing_values() {
         assert!(parse_args(&to_args(&["--nope"])).is_err());
         assert!(parse_args(&to_args(&["--vault"])).is_err());
-        assert!(parse_args(&[]).is_err());
+    }
+
+    #[test]
+    fn no_arguments_means_follow_the_app() {
+        // An empty root list is valid and selects follow-the-app mode, rather
+        // than being the configuration error it used to be.
+        assert_eq!(parse_args(&[]).unwrap(), Some(Vec::new()));
     }
 
     #[test]
     fn expands_home_relative_paths() {
+        let _guard = crate::HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("HOME", "/home/test");
         assert_eq!(expand("~/Notes"), PathBuf::from("/home/test/Notes"));
         assert_eq!(expand("~"), PathBuf::from("/home/test"));

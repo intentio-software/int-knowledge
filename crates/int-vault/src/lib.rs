@@ -20,6 +20,7 @@
 //! # Ok::<(), int_vault::VaultError>(())
 //! ```
 
+pub mod app_state;
 pub mod error;
 pub mod frontmatter;
 pub mod index;
@@ -28,6 +29,7 @@ pub mod note;
 pub mod search;
 pub mod vault;
 
+pub use app_state::AppState;
 pub use error::{Result, VaultError};
 pub use index::{Backlink, IndexedNote, ResolvedLink, UnresolvedLink, VaultIndex};
 pub use links::{Heading, LinkKind, LinkRef, Scan, TagRef};

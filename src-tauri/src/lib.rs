@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::{AppHandle, Emitter};
 
-use int_vault::{search, Backlink, Heading, NoteMeta, ResolvedLink, SearchHit, SearchOptions, Vault, VaultIndex};
+use int_vault::{
+    now_millis, search, Backlink, Heading, NoteMeta, ResolvedLink, SearchHit, SearchOptions, Vault,
+    VaultIndex,
+};
 
 /// How long to wait for a burst of filesystem events to go quiet.
 ///
@@ -158,6 +161,14 @@ pub struct SearchRequest {
 /// Open a folder as a vault and describe it.
 #[tauri::command]
 fn open_vault(state: tauri::State<'_, AppState>, root: String) -> Result<VaultSummary, String> {
+    // Record it so the MCP server can follow whichever vault is open here.
+    // A failure is not worth refusing to open the vault over.
+    if let Ok(vault) = open(&root) {
+        if let Err(err) = int_vault::app_state::write_active_vault(Some(vault.root()), now_millis()) {
+            eprintln!("[knowledge] could not record active vault: {err}");
+        }
+    }
+
     state.with_index(&root, |vault, index| VaultSummary {
         name: vault.name(),
         path: vault.root().to_string_lossy().to_string(),
@@ -524,9 +535,15 @@ fn watch_vault(app: AppHandle, state: tauri::State<'_, AppState>, root: String) 
 }
 
 /// Stop watching, e.g. when the user closes the vault.
+///
+/// Also clears the shared active-vault record, so an agent is not left pointed
+/// at a vault the user has closed.
 #[tauri::command]
 fn unwatch_vault(state: tauri::State<'_, AppState>) -> Result<(), String> {
     *state.watcher.lock().map_err(|_| "watcher lock is poisoned".to_string())? = None;
+    if let Err(err) = int_vault::app_state::write_active_vault(None, now_millis()) {
+        eprintln!("[knowledge] could not clear active vault: {err}");
+    }
     Ok(())
 }
 
