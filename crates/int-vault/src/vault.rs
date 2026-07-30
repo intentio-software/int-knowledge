@@ -20,6 +20,9 @@ pub const NOTE_EXTENSIONS: [&str; 3] = ["md", "markdown", "mdx"];
 /// Directory names never worth indexing.
 const SKIPPED_DIRS: [&str; 5] = ["node_modules", "target", "dist", ".git", ".obsidian"];
 
+/// Where trashed notes go. Dot-prefixed, so the walker already ignores it.
+pub const TRASH_DIR: &str = ".trash";
+
 /// Files larger than this are listed but not loaded into the index.
 const MAX_NOTE_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -300,7 +303,48 @@ impl Vault {
         self.write_note(&note.meta.path, &updated.to_content())
     }
 
-    /// Delete a note.
+    /// Move a note into the vault's `.trash` folder rather than deleting it.
+    ///
+    /// `.trash` begins with a dot, so the walker already skips it: the note
+    /// vanishes from listing, search and the link graph exactly as a delete
+    /// would, but the file is still on disk. That difference matters when the
+    /// caller is an agent acting on an instruction it may have misread.
+    ///
+    /// Returns the note's new vault-relative path.
+    pub fn trash_note(&self, relative: &str) -> Result<String> {
+        let path = self.normalize_note(relative)?;
+        let absolute = self.root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if !absolute.is_file() {
+            return Err(VaultError::NoteNotFound(path));
+        }
+
+        let trash = self.root.join(TRASH_DIR);
+        fs::create_dir_all(&trash)?;
+
+        let name = path.rsplit('/').next().unwrap_or(&path);
+        let (stem, extension) = match name.rsplit_once('.') {
+            Some((stem, ext)) => (stem, format!(".{ext}")),
+            None => (name, String::new()),
+        };
+
+        // Two notes with the same filename can be trashed from different
+        // folders, so the second must not silently replace the first.
+        let mut target = trash.join(name);
+        let mut suffix = 2;
+        while target.exists() {
+            target = trash.join(format!("{stem} {suffix}{extension}"));
+            suffix += 1;
+            if suffix > 999 {
+                return Err(VaultError::NoteExists(format!("{TRASH_DIR}/{name}")));
+            }
+        }
+
+        fs::rename(&absolute, &target)?;
+        let file = target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        Ok(format!("{TRASH_DIR}/{file}"))
+    }
+
+    /// Delete a note outright. Prefer [`Vault::trash_note`] where recovery matters.
     pub fn delete_note(&self, relative: &str) -> Result<String> {
         let path = self.normalize_note(relative)?;
         let absolute = self.root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -670,6 +714,39 @@ mod tests {
         assert!(vault.list_unavailable().is_empty());
         assert!(vault.read_note("A.md").is_ok());
         assert_eq!(vault.list_notes().len(), 1);
+    }
+
+    #[test]
+    fn trashing_removes_a_note_from_the_vault_but_keeps_the_file() {
+        let vault = temp_vault("trash");
+        vault.write_note("Projects/Alpha.md", "# Alpha\n").unwrap();
+        assert_eq!(vault.list_notes().len(), 1);
+
+        let trashed = vault.trash_note("Projects/Alpha.md").unwrap();
+        assert_eq!(trashed, ".trash/Alpha.md");
+        // Gone from the vault's view...
+        assert!(vault.list_notes().is_empty());
+        assert!(vault.read_note("Projects/Alpha.md").is_err());
+        // ...but still on disk.
+        assert!(vault.root().join(".trash/Alpha.md").is_file());
+    }
+
+    #[test]
+    fn trashing_the_same_filename_twice_does_not_overwrite() {
+        let vault = temp_vault("trash-collide");
+        vault.write_note("One/Note.md", "first\n").unwrap();
+        vault.write_note("Two/Note.md", "second\n").unwrap();
+
+        assert_eq!(vault.trash_note("One/Note.md").unwrap(), ".trash/Note.md");
+        assert_eq!(vault.trash_note("Two/Note.md").unwrap(), ".trash/Note 2.md");
+        assert_eq!(fs::read_to_string(vault.root().join(".trash/Note.md")).unwrap(), "first\n");
+        assert_eq!(fs::read_to_string(vault.root().join(".trash/Note 2.md")).unwrap(), "second\n");
+    }
+
+    #[test]
+    fn trashing_a_missing_note_errors() {
+        let vault = temp_vault("trash-missing");
+        assert!(vault.trash_note("Nope.md").is_err());
     }
 
     #[test]

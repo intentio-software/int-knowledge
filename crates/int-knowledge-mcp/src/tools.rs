@@ -64,8 +64,11 @@ impl ToolProvider for VaultTools {
                 "vault is open, ask the user to open one in the app rather than guessing a path.\n",
                 "- Paths are vault-relative and forward-slashed, e.g. `Projects/Alpha.md`. The `.md` ",
                 "extension is added automatically when omitted.\n",
-                "- Prefer `search_notes` to find a note before reading it; prefer `append_note` over ",
-                "`write_note` when adding to an existing note, since `write_note` replaces the whole file.\n",
+                "- Prefer `search_notes` to find a note before reading it. To change part of a note use ",
+                "`edit_note`, and to add to the end use `append_note`; `write_note` replaces the entire ",
+                "file and will discard anything changed since you last read it.\n",
+                "- `delete_note` moves a note to `.trash` by default, so a mistake is recoverable. ",
+                "`delete_folder` and `delete_note` with `permanent` are not — confirm those with the user.\n",
                 "- Link notes together with `[[Note Name]]`. Links to notes that do not exist yet are fine ",
                 "and show up in `unresolved_links` as suggested writing.\n",
                 "- Vault files are the user's own documents. Deleting or overwriting is destructive and ",
@@ -130,6 +133,19 @@ impl ToolProvider for VaultTools {
                 ),
             ),
             Tool::new(
+                "edit_note",
+                "Replace an exact piece of text inside a note, leaving the rest untouched. Prefer this over write_note for changing part of a note: it does not require sending the whole file back, and it cannot silently discard edits made since you read it. Fails if the text is absent, or if it appears more than once and replace_all is not set.",
+                self.schema(
+                    json!({
+                        "path": {"type": "string", "description": "Vault-relative path."},
+                        "find": {"type": "string", "description": "Exact text to replace, including whitespace and newlines. Include enough surrounding context to make it unique."},
+                        "replace": {"type": "string", "description": "Replacement text. Use an empty string to delete the matched text."},
+                        "replace_all": {"type": "boolean", "description": "Replace every occurrence instead of requiring exactly one. Default false."}
+                    }),
+                    &["path", "find", "replace"],
+                ),
+            ),
+            Tool::new(
                 "write_note",
                 "Replace a note's entire contents, creating it if absent. Destructive: prefer append_note or update_frontmatter for incremental changes.",
                 self.schema(
@@ -166,8 +182,36 @@ impl ToolProvider for VaultTools {
             ),
             Tool::new(
                 "delete_note",
-                "Delete a note from the vault. Not undoable from here — confirm with the user first.",
-                self.schema(json!({"path": {"type": "string", "description": "Vault-relative path."}}), &["path"]),
+                "Move a note to the vault's .trash folder. It disappears from listing, search and links, but the file survives and can be restored by hand. Set permanent to erase it instead, which cannot be undone.",
+                self.schema(
+                    json!({
+                        "path": {"type": "string", "description": "Vault-relative path."},
+                        "permanent": {"type": "boolean", "description": "Erase the file rather than moving it to .trash. Default false."}
+                    }),
+                    &["path"],
+                ),
+            ),
+            Tool::new(
+                "move_folder",
+                "Move or rename a folder and everything in it, rewriting [[wikilinks]] across the vault so nothing breaks.",
+                self.schema(
+                    json!({
+                        "from": {"type": "string", "description": "Current folder path, e.g. `Projects`."},
+                        "to": {"type": "string", "description": "New folder path. Parent folders are created as needed."},
+                        "update_links": {"type": "boolean", "description": "Rewrite wikilinks pointing into the folder. Default true."}
+                    }),
+                    &["from", "to"],
+                ),
+            ),
+            Tool::new(
+                "delete_folder",
+                "Delete a folder and every note inside it. Destructive and not undoable — list the notes with list_notes first and confirm with the user.",
+                self.schema(json!({"path": {"type": "string", "description": "Vault-relative folder path."}}), &["path"]),
+            ),
+            Tool::new(
+                "list_orphans",
+                "List notes that nothing links to and that link nowhere themselves — the parts of the vault that have fallen out of the graph.",
+                self.schema(json!({}), &[]),
             ),
             Tool::new(
                 "move_note",
@@ -362,6 +406,42 @@ impl ToolProvider for VaultTools {
                 Ok(ToolOutput::json(&json!({ "created": written })))
             }
 
+            "edit_note" => {
+                let path = require_str(args, "path")?;
+                let find = args.get("find").and_then(Value::as_str).unwrap_or_default();
+                if find.is_empty() {
+                    return Err("`find` must not be empty".into());
+                }
+                let replace = args.get("replace").and_then(Value::as_str).unwrap_or_default();
+                let replace_all = opt_bool(args, "replace_all", false);
+
+                let raw = entry.vault().read_raw(&path).map_err(|err| err.to_string())?;
+                let occurrences = raw.matches(find).count();
+                match occurrences {
+                    0 => {
+                        return Err(format!(
+                            "`find` does not appear in {path}. Read the note first — whitespace and line breaks must match exactly."
+                        ))
+                    }
+                    // Refusing an ambiguous edit is the whole point: picking one
+                    // occurrence arbitrarily would change the wrong line.
+                    n if n > 1 && !replace_all => {
+                        return Err(format!(
+                            "`find` appears {n} times in {path}. Add surrounding context to make it unique, or set replace_all."
+                        ))
+                    }
+                    _ => {}
+                }
+
+                let updated = if replace_all { raw.replace(find, replace) } else { raw.replacen(find, replace, 1) };
+                let written = entry.vault().write_note(&path, &updated).map_err(|err| err.to_string())?;
+                entry.invalidate();
+                Ok(ToolOutput::json(&json!({
+                    "edited": written,
+                    "replacements": if replace_all { occurrences } else { 1 },
+                })))
+            }
+
             "write_note" => {
                 let path = require_str(args, "path")?;
                 let content = args.get("content").and_then(Value::as_str).unwrap_or_default();
@@ -410,9 +490,80 @@ impl ToolProvider for VaultTools {
 
             "delete_note" => {
                 let path = require_str(args, "path")?;
-                let deleted = entry.vault().delete_note(&path).map_err(|err| err.to_string())?;
+                let permanent = opt_bool(args, "permanent", false);
+                let result = if permanent {
+                    let deleted = entry.vault().delete_note(&path).map_err(|err| err.to_string())?;
+                    json!({ "deleted": deleted, "recoverable": false })
+                } else {
+                    let trashed = entry.vault().trash_note(&path).map_err(|err| err.to_string())?;
+                    json!({ "deleted": path, "movedTo": trashed, "recoverable": true })
+                };
                 entry.invalidate();
-                Ok(ToolOutput::json(&json!({ "deleted": deleted })))
+                Ok(ToolOutput::json(&result))
+            }
+
+            "move_folder" => {
+                let from = require_str(args, "from")?;
+                let to = require_str(args, "to")?;
+                let update_links = opt_bool(args, "update_links", true);
+
+                let from_path = entry.vault().normalize(&from).map_err(|err| err.to_string())?;
+                let to_path = entry.vault().normalize(&to).map_err(|err| err.to_string())?;
+
+                // Worked out before the move, while the old paths still resolve.
+                let moves: Vec<(String, String)> = if update_links {
+                    entry
+                        .vault()
+                        .notes_under(&from_path)
+                        .map_err(|err| err.to_string())?
+                        .into_iter()
+                        .map(|note| {
+                            let moved = format!("{to_path}{}", &note[from_path.len()..]);
+                            (note, moved)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let rewrites = if moves.is_empty() {
+                    Vec::new()
+                } else {
+                    entry.index().rewrite_links_for_moves(&moves)
+                };
+
+                let (_, moved_to) =
+                    entry.vault().move_folder(&from_path, &to_path).map_err(|err| err.to_string())?;
+                let mut relinked = Vec::new();
+                for (path, content) in rewrites {
+                    match entry.vault().write_note(&path, &content) {
+                        Ok(written) => relinked.push(written),
+                        Err(err) => eprintln!("[knowledge] link rewrite failed for {path}: {err}"),
+                    }
+                }
+                entry.invalidate();
+                Ok(ToolOutput::json(&json!({
+                    "from": from_path,
+                    "to": moved_to,
+                    "notes_moved": moves.len(),
+                    "notes_relinked": relinked,
+                })))
+            }
+
+            "delete_folder" => {
+                let path = require_str(args, "path")?;
+                let contained = entry.vault().notes_under(&path).unwrap_or_default();
+                let deleted = entry.vault().delete_folder(&path).map_err(|err| err.to_string())?;
+                entry.invalidate();
+                Ok(ToolOutput::json(&json!({
+                    "deleted": deleted,
+                    "notes_removed": contained,
+                    "recoverable": false,
+                })))
+            }
+
+            "list_orphans" => {
+                let orphans = entry.index().orphans();
+                Ok(ToolOutput::json(&json!({ "count": orphans.len(), "orphans": orphans })))
             }
 
             "move_note" => {
@@ -633,6 +784,98 @@ mod tests {
         assert_eq!(read["frontmatter"]["status"], "live");
         assert!(read["frontmatter"].get("title").is_none());
         assert!(read["body"].as_str().unwrap().contains("Body text"));
+    }
+
+    #[test]
+    fn edits_a_unique_fragment_in_place() {
+        let mut tools = tools_with("edit", &[("A.md", "# A\n\nstatus: draft\n\nbody text\n")]);
+        let result = call(&mut tools, "edit_note", json!({
+            "path": "A.md", "find": "status: draft", "replace": "status: live"
+        }));
+        assert_eq!(result["replacements"], 1);
+        let read = call(&mut tools, "read_note", json!({"path": "A.md"}));
+        let body = read["body"].as_str().unwrap();
+        assert!(body.contains("status: live"));
+        assert!(body.contains("body text"), "the rest of the note must survive");
+    }
+
+    #[test]
+    fn refuses_an_ambiguous_edit() {
+        let mut tools = tools_with("edit-ambiguous", &[("A.md", "todo\ntodo\n")]);
+        let err = tools
+            .call("edit_note", &json!({"path": "A.md", "find": "todo", "replace": "done"}))
+            .unwrap_err();
+        assert!(err.contains("appears 2 times"), "{err}");
+
+        // Explicit opt-in replaces every occurrence.
+        let all = call(&mut tools, "edit_note", json!({
+            "path": "A.md", "find": "todo", "replace": "done", "replace_all": true
+        }));
+        assert_eq!(all["replacements"], 2);
+    }
+
+    #[test]
+    fn refuses_an_edit_that_does_not_match() {
+        let mut tools = tools_with("edit-missing", &[("A.md", "# A\n")]);
+        let err = tools
+            .call("edit_note", &json!({"path": "A.md", "find": "nowhere", "replace": "x"}))
+            .unwrap_err();
+        assert!(err.contains("does not appear"), "{err}");
+    }
+
+    #[test]
+    fn delete_is_recoverable_by_default() {
+        let mut tools = tools_with("trash", &[("A.md", "# A\n")]);
+        let result = call(&mut tools, "delete_note", json!({"path": "A.md"}));
+        assert_eq!(result["recoverable"], true);
+        assert_eq!(result["movedTo"], ".trash/A.md");
+        // Out of the vault's view, but still on disk.
+        assert_eq!(call(&mut tools, "list_notes", json!({}))["count"], 0);
+    }
+
+    #[test]
+    fn permanent_delete_is_marked_unrecoverable() {
+        let mut tools = tools_with("erase", &[("A.md", "# A\n")]);
+        let result = call(&mut tools, "delete_note", json!({"path": "A.md", "permanent": true}));
+        assert_eq!(result["recoverable"], false);
+    }
+
+    #[test]
+    fn moving_a_folder_relinks_the_vault() {
+        let mut tools = tools_with("folder-move", &[
+            ("Projects/Alpha.md", "# Alpha\n"),
+            ("Ref.md", "see [[Alpha]]\n"),
+        ]);
+        let moved = call(&mut tools, "move_folder", json!({"from": "Projects", "to": "Archive/Projects"}));
+        assert_eq!(moved["notes_moved"], 1);
+
+        let read = call(&mut tools, "read_note", json!({"path": "Ref.md"}));
+        // The bare name still resolves, so the link need not have been rewritten —
+        // what matters is that it still points at the note in its new home.
+        assert_eq!(read["links"][0]["resolved_path"], "Archive/Projects/Alpha.md");
+    }
+
+    #[test]
+    fn deleting_a_folder_reports_what_it_removed() {
+        let mut tools = tools_with("folder-delete", &[
+            ("Old/A.md", "# A\n"),
+            ("Old/B.md", "# B\n"),
+            ("Keep.md", "# Keep\n"),
+        ]);
+        let deleted = call(&mut tools, "delete_folder", json!({"path": "Old"}));
+        assert_eq!(deleted["notes_removed"].as_array().unwrap().len(), 2);
+        assert_eq!(call(&mut tools, "list_notes", json!({}))["count"], 1);
+    }
+
+    #[test]
+    fn lists_orphaned_notes() {
+        let mut tools = tools_with("orphans", &[
+            ("Linked.md", "# Linked\n"),
+            ("Ref.md", "see [[Linked]]\n"),
+            ("Alone.md", "# Alone\n"),
+        ]);
+        let orphans = call(&mut tools, "list_orphans", json!({}));
+        assert_eq!(orphans["orphans"], json!(["Alone.md"]));
     }
 
     #[test]
