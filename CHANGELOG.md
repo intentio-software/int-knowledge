@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/intentio-software/int-knowledge/compare/v1.1.0...v1.2.0) (2026-07-31)
+
+
+### Features
+
+* match Mind Map's About dialog, toast and update flow exactly ([18e9831](https://github.com/intentio-software/int-knowledge/commit/18e98310464a956851e15ea7e1bf09e7f8e3fbdc))
+
 # [1.1.0](https://github.com/intentio-software/int-knowledge/compare/v1.0.0...v1.1.0) (2026-07-30)
 
 
