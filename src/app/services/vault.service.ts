@@ -101,6 +101,11 @@ export class VaultService {
 
   async closeVault(): Promise<void> {
     await this.stopWatching();
+    try {
+      await invoke("close_vault");
+    } catch {
+      // Nothing was open to record as closed.
+    }
     this.vault.set(null);
     this.notes.set([]);
     this.activeNote.set(null);

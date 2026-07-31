@@ -534,13 +534,27 @@ fn watch_vault(app: AppHandle, state: tauri::State<'_, AppState>, root: String) 
     Ok(())
 }
 
-/// Stop watching, e.g. when the user closes the vault.
+/// Stop watching.
 ///
-/// Also clears the shared active-vault record, so an agent is not left pointed
-/// at a vault the user has closed.
+/// This only detaches the current watcher. It is also called defensively by
+/// `startWatching` before it attaches a fresh one, so it must NOT touch the
+/// shared active-vault record — doing so previously meant every vault-open
+/// immediately cleared the record it had just written, since a watch restart
+/// always follows an open. Closing the vault outright goes through
+/// `close_vault` instead.
 #[tauri::command]
 fn unwatch_vault(state: tauri::State<'_, AppState>) -> Result<(), String> {
     *state.watcher.lock().map_err(|_| "watcher lock is poisoned".to_string())? = None;
+    Ok(())
+}
+
+/// Record that no vault is open, e.g. when the user closes the vault.
+///
+/// Separate from `unwatch_vault` so an agent following the shared record is
+/// only ever pointed away from a vault the user actually closed, not one that
+/// merely had its file watcher restarted.
+#[tauri::command]
+fn close_vault() -> Result<(), String> {
     if let Err(err) = int_vault::app_state::write_active_vault(None, now_millis()) {
         eprintln!("[knowledge] could not clear active vault: {err}");
     }
@@ -673,6 +687,7 @@ pub fn run() {
             graph,
             watch_vault,
             unwatch_vault,
+            close_vault,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
