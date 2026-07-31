@@ -456,3 +456,44 @@ kbd {
   border-radius: 4px;
   color: var(--ink-faint);
 }
+
+/* ------------------------------------------------------------- update toast */
+
+/* The #message template replaces PrimeNG's own layout but still sits inside its
+   content row, as a sibling of the close button. Unstyled, this block stacks
+   the icon above the text and leaves the close button pressed against it
+   mid-toast; growing to fill the row puts the button back in the corner. */
+.update-toast {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.update-toast .p-toast-message-icon {
+  flex: none;
+  /* Nudged to sit on the summary's line rather than above it. */
+  margin-top: 0.1rem;
+  font-size: 1.05rem;
+}
+
+.update-toast .p-toast-message-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.update-toast .p-toast-summary {
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.update-toast .p-toast-detail {
+  margin: 0;
+  line-height: 1.45;
+  opacity: 0.85;
+  /* A long path in "Sent … to Knowledge" must wrap, not stretch the toast. */
+  overflow-wrap: anywhere;
+}

@@ -1,3 +1,26 @@
+<!-- The About dialog's backdrop sits at z-index 3000. PrimeNG's default toast
+     layer is below that, which would put an update notice behind the blur
+     instead of in front of it. -->
+<p-toast position="bottom-right" [baseZIndex]="4000">
+  <ng-template #message let-message>
+    <div class="update-toast">
+      <span class="p-toast-message-icon pi pi-info-circle"></span>
+      <div class="p-toast-message-text">
+        <span class="p-toast-summary">{{ message.summary }}</span>
+        <div class="p-toast-detail">{{ message.detail }}</div>
+        @if (message.data) {
+          <p-button
+            label="Update Now"
+            size="small"
+            styleClass="mt-2"
+            (onClick)="installUpdate(message)"
+          />
+        }
+      </div>
+    </div>
+  </ng-template>
+</p-toast>
+
 @if (!vaultService.isOpen()) {
   <app-vault-launcher
     [recents]="vaultService.recents()"

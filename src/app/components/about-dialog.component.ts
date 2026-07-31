@@ -1,15 +1,15 @@
-import { ChangeDetectionStrategy, Component, EventEmitter, Input, Output, inject } from "@angular/core";
+import { ChangeDetectionStrategy, Component, EventEmitter, Input, Output, inject, signal } from "@angular/core";
 import { CommonModule } from "@angular/common";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { UpdaterService } from "../services/updater.service";
 
 /**
  * The About dialog.
  *
- * Styled to match Intentio Mind Map's — same gradient card, same layout, same
- * inline update check — so the two apps read as one suite rather than two
- * products that happen to share a logo.
+ * Deliberately identical to Intentio Mind Map's — same markup, same class names,
+ * same styling, same update flow — so the two apps read as one suite. Update
+ * results are reported through the shared toast rather than inline here, which
+ * is what Mind Map does and what keeps the dialog dismissible mid-download.
  */
 @Component({
   selector: "app-about-dialog",
@@ -17,76 +17,60 @@ import { UpdaterService } from "../services/updater.service";
   imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="overlay" (click)="closed.emit()">
+    <div class="about-backdrop" (click)="closed.emit()">
       <div
-        class="dialog"
+        id="about-dialog"
+        class="about-dialog"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="aboutTitle"
+        aria-labelledby="aboutDialogTitle"
+        aria-describedby="aboutDialogBody"
         (click)="$event.stopPropagation()"
       >
-        <button type="button" class="close" aria-label="Close" (click)="closed.emit()">
-          <i class="pi pi-times"></i>
+        <button
+          type="button"
+          class="about-close"
+          aria-label="Close about dialog"
+          (click)="closed.emit()"
+        >
+          <i class="pi pi-times" aria-hidden="true"></i>
         </button>
-
-        <div class="header">
-          <img src="assets/intentio-logo.svg" alt="Intentio" class="logo" />
-          <div class="titles">
-            <h2 id="aboutTitle">Intentio Knowledge</h2>
+        <div class="about-header">
+          <img src="assets/intentio-logo.png" alt="Intentio logo" class="about-logo" />
+          <div class="about-title-group">
+            <h2 id="aboutDialogTitle">Intentio Knowledge</h2>
             <p>Your notes, on your disk, open to your agents.</p>
-            <div class="version">
-              <span>v{{ version }}</span>
+            <div class="about-version">
+              <span>{{ version }}</span>
               <button
                 type="button"
-                class="check"
-                [disabled]="updater.busy"
-                (click)="updater.check()"
+                class="check-updates-btn"
+                [disabled]="isCheckingUpdates()"
+                (click)="checkForUpdates()"
               >
-                <i class="pi" [ngClass]="updater.busy ? 'pi-spin pi-spinner' : 'pi-refresh'"></i>
-                {{ updater.busy ? "Checking…" : "Check for updates" }}
+                <i class="pi" [ngClass]="isCheckingUpdates() ? 'pi-spin pi-spinner' : 'pi-refresh'"></i>
+                {{ isCheckingUpdates() ? 'Checking…' : 'Check for updates' }}
               </button>
             </div>
           </div>
         </div>
-
-        @switch (updater.state().kind) {
-          @case ("current") {
-            <p class="status ok"><i class="pi pi-check-circle"></i> You're up to date.</p>
-          }
-          @case ("unsupported") {
-            <p class="status"><i class="pi pi-info-circle"></i> Updates only work in the desktop app.</p>
-          }
-          @case ("failed") {
-            <p class="status warn">
-              <i class="pi pi-exclamation-triangle"></i>
-              {{ failureMessage() }}
-            </p>
-          }
-          @case ("downloading") {
-            <p class="status"><i class="pi pi-spin pi-spinner"></i> Downloading — the app will restart.</p>
-          }
-          @case ("available") {
-            <div class="status update">
-              <div>
-                <strong>Version {{ availableVersion() }} is available.</strong>
-                <span class="notes" *ngIf="releaseNotes()">{{ releaseNotes() }}</span>
-              </div>
-              <button type="button" class="install" (click)="updater.install()">Update now</button>
-            </div>
-          }
-          @default {}
-        }
-
-        <div class="body">
+        <div id="aboutDialogBody" class="about-body">
           <p>
-            A vault is an ordinary folder of markdown on your own disk — linked with
-            <code>[[wikilinks]]</code>, searchable, and versionable with git. The bundled MCP server
-            gives AI agents the same view of it that you have.
+            Intentio Knowledge keeps your notes as plain markdown in a folder you choose, linked
+            with wikilinks and searchable in an instant. The companion MCP server gives AI agents
+            the same view of your vault that you have.
           </p>
-          <p class="license">Free for personal use. Commercial licence coming soon.</p>
-          <a class="link" (click)="openSite()">
-            <i class="pi pi-external-link"></i>
+          <p class="about-license">
+            {{ licensingNotice }}
+          </p>
+          <a
+            class="about-link"
+            href="https://intentiosoftware.com"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             intentiosoftware.com
+            <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
           </a>
         </div>
       </div>
@@ -94,81 +78,94 @@ import { UpdaterService } from "../services/updater.service";
   `,
   styles: [
     `
-      .overlay {
+      /* Above the app chrome, and below the toast layer so an update notice
+         appears in front of the blur rather than behind it. */
+      .about-backdrop {
         position: fixed;
         inset: 0;
-        z-index: 80;
+        background: rgba(0, 0, 0, 0.35);
+        backdrop-filter: blur(6px);
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(2, 10, 20, 0.55);
-        backdrop-filter: blur(3px);
+        z-index: 3000;
+        animation: aboutFadeIn 0.2s ease;
       }
-      /* Deliberately the same gradient card as Mind Map's About dialog. */
-      .dialog {
+
+      @keyframes aboutFadeIn {
+        from {
+          opacity: 0;
+        }
+      }
+
+      .about-dialog {
         position: relative;
-        width: min(440px, calc(100% - 32px));
+        width: min(420px, calc(100% - 32px));
         padding: 32px 24px 24px;
         border-radius: 16px;
-        background: linear-gradient(135deg, rgba(6, 42, 68, 0.96), rgba(12, 73, 108, 0.92));
+        background: linear-gradient(135deg, rgba(6, 42, 68, 0.95), rgba(12, 73, 108, 0.9));
         border: 1px solid rgba(255, 255, 255, 0.15);
-        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
         color: #fff;
+        font-family: "Inter", system-ui, sans-serif;
       }
-      .close {
+
+      .about-close {
         position: absolute;
         top: 0;
         right: 0;
         transform: translate(50%, -50%);
         width: 32px;
         height: 32px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
         border-radius: 50%;
         border: 1px solid rgba(255, 255, 255, 0.25);
         background: rgba(255, 255, 255, 0.12);
         color: inherit;
         cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        line-height: 1;
         box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
       }
-      .close:hover {
-        background: rgba(255, 255, 255, 0.2);
-      }
-      .header {
+
+      .about-header {
         display: flex;
         gap: 14px;
         align-items: center;
-        margin-bottom: 14px;
+        margin-bottom: 12px;
       }
-      .logo {
+
+      .about-logo {
         width: 56px;
         height: 56px;
         border-radius: 12px;
         border: 1px solid rgba(255, 255, 255, 0.2);
-        background: rgba(255, 255, 255, 0.08);
-        padding: 8px;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
       }
-      .titles h2 {
+
+      .about-title-group h2 {
         margin: 0;
         font-size: 1.2rem;
       }
-      .titles p {
+
+      .about-title-group p {
         margin: 2px 0 0;
         font-size: 0.9rem;
         opacity: 0.85;
       }
-      .version {
-        margin-top: 6px;
+
+      .about-version {
         font-size: 0.8rem;
-        opacity: 0.9;
+        opacity: 0.8;
         display: flex;
         align-items: center;
         gap: 10px;
         flex-wrap: wrap;
       }
-      .check {
+
+      .check-updates-btn {
         appearance: none;
         border: 1px solid rgba(255, 255, 255, 0.25);
         background: rgba(255, 255, 255, 0.08);
@@ -183,121 +180,60 @@ import { UpdaterService } from "../services/updater.service";
         cursor: pointer;
         transition: background 0.2s ease, border-color 0.2s ease;
       }
-      .check:hover:not(:disabled) {
+
+      .check-updates-btn:hover:not(:disabled) {
         background: rgba(255, 255, 255, 0.16);
         border-color: rgba(255, 255, 255, 0.45);
       }
-      .check:disabled {
+
+      .check-updates-btn:disabled {
         opacity: 0.6;
         cursor: default;
       }
-      .status {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin: 0 0 14px;
-        padding: 8px 12px;
-        border-radius: 8px;
-        background: rgba(255, 255, 255, 0.08);
+
+      .about-license {
         font-size: 0.85rem;
+        color: rgba(255, 255, 255, 0.95);
+        margin-bottom: 0.5rem;
       }
-      .status.ok {
-        color: #bff3d2;
+
+      .about-body {
+        font-size: 0.92rem;
+        line-height: 1.45;
       }
-      .status.warn {
-        color: #ffd7c9;
+
+      .about-body p {
+        margin-bottom: 12px;
       }
-      .status.update {
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 0.9rem;
-        background: rgba(240, 95, 54, 0.2);
-        border: 1px solid rgba(240, 95, 54, 0.45);
-      }
-      .status.update strong {
-        display: block;
-      }
-      .notes {
-        display: block;
-        margin-top: 3px;
-        font-size: 0.78rem;
-        opacity: 0.85;
-        max-height: 4.5em;
-        overflow: hidden;
-      }
-      .install {
-        flex: none;
-        border: none;
-        border-radius: 999px;
-        padding: 5px 14px;
-        background: #f05f36;
-        color: #fff;
-        font-size: 0.8rem;
-        cursor: pointer;
-      }
-      .install:hover {
-        background: #d94d26;
-      }
-      .body {
-        font-size: 0.9rem;
-        line-height: 1.5;
-      }
-      .body p {
-        margin: 0 0 12px;
-      }
-      .body code {
-        font-family: var(--font-mono);
-        font-size: 0.85em;
-        padding: 0.05em 0.3em;
-        border-radius: 4px;
-        background: rgba(255, 255, 255, 0.12);
-      }
-      .license {
-        font-size: 0.85rem;
-        opacity: 0.95;
-      }
-      .link {
+
+      .about-link {
         display: inline-flex;
         align-items: center;
         gap: 6px;
         color: #ffd6c9;
         text-decoration: none;
         font-weight: 600;
-        cursor: pointer;
       }
-      .link:hover {
+
+      .about-link:hover {
         color: #fff;
       }
     `
   ]
 })
 export class AboutDialogComponent {
-  readonly updater = inject(UpdaterService);
+  private readonly updater = inject(UpdaterService);
 
-  @Input() version = "0.0.0";
+  @Input() version = "v0.0.0";
 
   @Output() readonly closed = new EventEmitter<void>();
 
-  availableVersion(): string {
-    const state = this.updater.state();
-    return state.kind === "available" ? state.version : "";
-  }
+  readonly licensingNotice = "Free for personal use – commercial license coming soon.";
+  readonly isCheckingUpdates = signal(false);
 
-  releaseNotes(): string {
-    const state = this.updater.state();
-    return state.kind === "available" ? (state.notes ?? "") : "";
-  }
-
-  failureMessage(): string {
-    const state = this.updater.state();
-    return state.kind === "failed" ? state.message : "";
-  }
-
-  async openSite(): Promise<void> {
-    try {
-      await openUrl("https://intentiosoftware.com");
-    } catch {
-      // Nothing useful to do if the browser cannot be launched.
-    }
+  async checkForUpdates(): Promise<void> {
+    this.isCheckingUpdates.set(true);
+    await this.updater.manualCheck();
+    this.isCheckingUpdates.set(false);
   }
 }

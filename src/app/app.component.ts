@@ -15,6 +15,9 @@ import { UnlistenFn, listen } from "@tauri-apps/api/event";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+import { Button } from "primeng/button";
+import { Toast } from "primeng/toast";
+
 import { AboutDialogComponent } from "./components/about-dialog.component";
 import { CommandPaletteComponent, PaletteMode } from "./components/command-palette.component";
 import { ContextMenuComponent, MenuItem } from "./components/context-menu.component";
@@ -56,6 +59,8 @@ import { VaultService } from "./services/vault.service";
   standalone: true,
   imports: [
     CommonModule,
+    Toast,
+    Button,
     AboutDialogComponent,
     CommandPaletteComponent,
     ContextMenuComponent,
@@ -136,9 +141,17 @@ export class AppComponent implements OnInit, OnDestroy {
     });
   }
 
+  /** Hand a found update to the updater, from the toast's action button. */
+  installUpdate(message: { data?: unknown }): void {
+    void this.updater.installUpdate(message.data);
+  }
+
   async ngOnInit(): Promise<void> {
     await this.connectNativeMenu();
     void this.loadVersion();
+
+    // Delay slightly so the app shell is fully rendered before showing a toast.
+    setTimeout(() => void this.updater.checkForUpdates(), 3000);
 
     // Reopening the last vault is the overwhelmingly common intent; a failure
     // here just lands the user on the launcher.
@@ -244,8 +257,8 @@ export class AppComponent implements OnInit, OnDestroy {
         this.aboutOpen.set(true);
         break;
       case "check-updates":
-        this.aboutOpen.set(true);
-        await this.updater.check();
+        // Reports through the toast, so the dialog is not needed to see it.
+        await this.updater.manualCheck();
         break;
       case "website":
         await openUrl("https://intentiosoftware.com").catch(() => undefined);

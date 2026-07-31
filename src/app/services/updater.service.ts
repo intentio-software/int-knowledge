@@ -1,107 +1,94 @@
-import { Injectable, signal } from "@angular/core";
+import { Injectable, inject } from '@angular/core';
+import { MessageService } from 'primeng/api';
 
-export type UpdateState =
-  | { kind: "idle" }
-  | { kind: "checking" }
-  | { kind: "current"; version: string }
-  | { kind: "available"; version: string; notes?: string; update: unknown }
-  | { kind: "downloading" }
-  | { kind: "failed"; message: string }
-  | { kind: "unsupported" };
-
-/**
- * Update checking for the desktop app.
- *
- * Mirrors Intentio Mind Map's updater, but reports through a signal instead of
- * toasts so the About dialog can show the result inline — one place to look
- * rather than a notification that disappears.
- */
-@Injectable({ providedIn: "root" })
+@Injectable({ providedIn: 'root' })
 export class UpdaterService {
-  readonly state = signal<UpdateState>({ kind: "idle" });
+  private messages = inject(MessageService);
 
-  get busy(): boolean {
-    const kind = this.state().kind;
-    return kind === "checking" || kind === "downloading";
+  async checkForUpdates(): Promise<void> {
+    if (typeof (window as any).__TAURI_INTERNALS__ === 'undefined') return;
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check();
+      if (!update?.available) return;
+      this.messages.add({
+        severity: 'info',
+        summary: `Update available — v${update.version}`,
+        detail: 'Click "Update Now" to download and restart.',
+        sticky: true,
+        data: update,
+      });
+    } catch (err) {
+      console.warn('Update check failed:', err);
+    }
   }
 
-  /** Check for an update, reporting every outcome through `state`. */
-  async check(): Promise<void> {
-    if (!isDesktop()) {
-      this.state.set({ kind: "unsupported" });
+  async manualCheck(): Promise<void> {
+    if (typeof (window as any).__TAURI_INTERNALS__ === 'undefined') {
+      this.messages.add({
+        severity: 'info',
+        summary: 'Updates unavailable',
+        detail: 'Auto-update only works in the desktop app.',
+        life: 4000,
+      });
       return;
     }
-
-    this.state.set({ kind: "checking" });
     try {
-      const { check } = await import("@tauri-apps/plugin-updater");
+      const { check } = await import('@tauri-apps/plugin-updater');
       const update = await check();
       if (!update?.available) {
-        this.state.set({ kind: "current", version: await currentVersion() });
+        this.messages.add({
+          severity: 'success',
+          summary: 'You\'re up to date',
+          detail: 'No updates available right now.',
+          life: 4000,
+        });
         return;
       }
-      this.state.set({
-        kind: "available",
-        version: update.version,
-        notes: update.body,
-        update
+      this.messages.add({
+        severity: 'info',
+        summary: `Update available — v${update.version}`,
+        detail: 'Click "Update Now" to download and restart.',
+        sticky: true,
+        data: update,
       });
-    } catch (error) {
-      this.state.set({ kind: "failed", message: describe(error) });
+    } catch (err) {
+      console.warn('Update check failed:', err);
+      const isNetworkError = String(err).toLowerCase().includes('fetch') ||
+        String(err).toLowerCase().includes('json');
+      this.messages.add({
+        severity: 'warn',
+        summary: 'Update check failed',
+        detail: isNetworkError
+          ? 'Could not reach the update server. Try again later.'
+          : String(err),
+        life: 4000,
+      });
     }
   }
 
-  /** Download and install a found update, then restart. */
-  async install(): Promise<void> {
-    const current = this.state();
-    if (current.kind !== "available") {
-      return;
-    }
-    this.state.set({ kind: "downloading" });
+  async installUpdate(update: any): Promise<void> {
     try {
-      await (current.update as { downloadAndInstall: () => Promise<void> }).downloadAndInstall();
-      const { relaunch } = await import("@tauri-apps/plugin-process");
+      this.messages.clear();
+      this.messages.add({
+        severity: 'info',
+        summary: 'Downloading update…',
+        detail: 'The app will restart automatically when ready.',
+        sticky: true,
+      });
+
+      await update.downloadAndInstall();
+
+      const { relaunch } = await import('@tauri-apps/plugin-process');
       await relaunch();
-    } catch (error) {
-      this.state.set({ kind: "failed", message: describe(error) });
+    } catch (err) {
+      console.error('Update failed:', err);
+      this.messages.add({
+        severity: 'error',
+        summary: 'Update failed',
+        detail: String(err),
+        life: 6000,
+      });
     }
   }
-
-  reset(): void {
-    this.state.set({ kind: "idle" });
-  }
-}
-
-function isDesktop(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-async function currentVersion(): Promise<string> {
-  try {
-    const { getVersion } = await import("@tauri-apps/api/app");
-    return await getVersion();
-  } catch {
-    return "";
-  }
-}
-
-/**
- * Turn an update error into something a person can act on.
- *
- * Before any release exists the endpoint 404s, which is not a fault worth
- * alarming anyone about — it just means there is nothing published yet.
- */
-function describe(error: unknown): string {
-  const text = String(error);
-  const lowered = text.toLowerCase();
-  if (lowered.includes("404") || lowered.includes("not found")) {
-    return "No releases have been published yet.";
-  }
-  if (lowered.includes("fetch") || lowered.includes("network") || lowered.includes("dns")) {
-    return "Could not reach the update server. Try again later.";
-  }
-  if (lowered.includes("signature")) {
-    return "The update failed its signature check and was not installed.";
-  }
-  return text;
 }
