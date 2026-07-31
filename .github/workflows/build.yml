@@ -174,7 +174,9 @@ jobs:
 
   publish:
     needs: build
-    if: ${{ !cancelled() }}
+    # Deliberately no `if:` — the default is success(), so a platform that fails
+    # leaves the release a draft. Publishing regardless would ship a release
+    # missing an installer, which is worse than one that arrives late.
     runs-on: ubuntu-latest
     permissions:
       contents: write
