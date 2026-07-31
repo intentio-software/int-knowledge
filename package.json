@@ -1,6 +1,6 @@
 {
   "name": "int-knowledge",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Intentio Knowledge — a local-first markdown vault with MCP built in.",
   "scripts": {
     "ng": "ng",

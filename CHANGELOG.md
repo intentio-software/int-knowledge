@@ -1,3 +1,10 @@
+## [1.2.1](https://github.com/intentio-software/int-knowledge/compare/v1.2.0...v1.2.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* stop clearing the active-vault record on every watch restart ([840258e](https://github.com/intentio-software/int-knowledge/commit/840258e72b1e163aeb03cbb3002c56aaf1e43a7f))
+
 # [1.2.0](https://github.com/intentio-software/int-knowledge/compare/v1.1.0...v1.2.0) (2026-07-31)
 
 
