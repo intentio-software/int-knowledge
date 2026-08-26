@@ -1,4 +1,14 @@
-import { ChangeDetectionStrategy, Component, Input, OnDestroy, OnInit, signal } from "@angular/core";
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  HostListener,
+  Input,
+  OnDestroy,
+  OnInit,
+  inject,
+  signal
+} from "@angular/core";
 import { CommonModule } from "@angular/common";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -61,12 +71,16 @@ interface VaultSync {
               <label class="row interval" [class.dim]="!settings().enabled">
                 <span>Check for changes every</span>
                 <select
-                  [value]="settings().intervalSeconds"
                   [disabled]="!settings().enabled"
-                  (change)="setInterval($event)"
+                  (change)="chooseInterval($event)"
                 >
                   @for (choice of intervals; track choice.seconds) {
-                    <option [value]="choice.seconds">{{ choice.label }}</option>
+                    <option
+                      [value]="choice.seconds"
+                      [selected]="choice.seconds === settings().intervalSeconds"
+                    >
+                      {{ choice.label }}
+                    </option>
                   }
                 </select>
               </label>
@@ -206,6 +220,7 @@ export class SyncIndicatorComponent implements OnInit, OnDestroy {
     { seconds: 1800, label: "30 minutes" }
   ];
 
+  private readonly host = inject(ElementRef<HTMLElement>);
   private path: string | null = null;
   private unlisten: UnlistenFn | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
@@ -218,6 +233,23 @@ export class SyncIndicatorComponent implements OnInit, OnDestroy {
     // The counts drift as the other person pushes, so they are re-read
     // periodically rather than only when something happens here.
     this.poll = setInterval(() => void this.refresh(), 30_000);
+  }
+
+  /** A panel that only closes by pressing the thing that opened it is a trap. */
+  @HostListener("document:pointerdown", ["$event"])
+  onPointerDown(event: PointerEvent): void {
+    if (!this.open()) {
+      return;
+    }
+    const target = event.target as Node | null;
+    if (target && !this.host.nativeElement.contains(target)) {
+      this.open.set(false);
+    }
+  }
+
+  @HostListener("document:keydown.escape")
+  onEscape(): void {
+    this.open.set(false);
   }
 
   ngOnDestroy(): void {
@@ -262,7 +294,7 @@ export class SyncIndicatorComponent implements OnInit, OnDestroy {
     }
   }
 
-  async setInterval(event: Event): Promise<void> {
+  async chooseInterval(event: Event): Promise<void> {
     const seconds = Number((event.target as HTMLSelectElement).value);
     if (!this.path || !Number.isFinite(seconds)) {
       return;

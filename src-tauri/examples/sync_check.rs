@@ -1,22 +1,38 @@
-//! Drive the vault sync against a real repository, to check the behaviour that
-//! matters: that it syncs, and that it refuses to guess when it cannot.
+//! Drive the vault sync against a real repository.
+//!
+//! Inspecting is read-only; syncing writes and pushes, so it only happens when
+//! asked for explicitly.
 fn main() {
     let vault = std::env::args().nth(1).expect("a vault path");
     let path = std::path::PathBuf::from(&vault);
+    let args: Vec<String> = std::env::args().collect();
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+
     let status = int_knowledge_lib::git_sync::status(&path);
     println!(
         "status: repo={} remote={} branch={:?} dirty={} ahead={} behind={} blocked={:?}",
-        status.is_repo, status.has_remote, status.branch, status.dirty, status.ahead, status.behind, status.blocked
+        status.is_repo, status.has_remote, status.branch, status.dirty,
+        status.ahead, status.behind, status.blocked
     );
-    // Syncing writes to a real repository and pushes to a real remote, so it
-    // only happens when asked for explicitly. Inspecting must never be a write.
-    if std::env::args().any(|arg| arg == "--receive") {
+
+    if has("--recent") {
+        println!("recent:");
+        for c in int_knowledge_lib::git_sync::recent_changes(&path, 8) {
+            println!(
+                "  {} {:9} {:22} {}",
+                c.at.get(..16).unwrap_or(&c.at),
+                c.kind,
+                c.author.unwrap_or_else(|| "—".into()),
+                c.path
+            );
+        }
+    }
+
+    if has("--receive") {
         let outcome = int_knowledge_lib::git_sync::receive(&path);
-        println!("recv  : changed={} blocked={:?}\n        {}", outcome.changed, outcome.blocked.is_some(), outcome.message);
-    } else if std::env::args().any(|arg| arg == "--sync") {
+        println!("recv  : changed={} — {}", outcome.changed, outcome.message);
+    } else if has("--sync") {
         let outcome = int_knowledge_lib::git_sync::sync(&path);
-        println!("sync  : changed={} blocked={:?}\n        {}", outcome.changed, outcome.blocked.is_some(), outcome.message);
-    } else {
-        println!("sync  : not run (pass --sync to actually sync)");
+        println!("sync  : changed={} — {}", outcome.changed, outcome.message);
     }
 }

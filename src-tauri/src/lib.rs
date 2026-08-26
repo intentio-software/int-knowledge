@@ -655,6 +655,18 @@ mod tests {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Recently changed notes: from the Git log where there is one, from file
+/// modification times where there is not.
+#[tauri::command]
+async fn recent_changes(vault: String, limit: Option<usize>) -> Vec<git_sync::Change> {
+    // Reading a long log shells out and can be slow on a big vault.
+    tauri::async_runtime::spawn_blocking(move || {
+        git_sync::recent_changes(&git_sync::vault_path(&vault), limit.unwrap_or(50))
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// The vault's sync preference, and whether Git can actually do it.
 #[tauri::command]
 fn vault_sync_settings(vault: String) -> int_vault::VaultSync {
@@ -719,6 +731,7 @@ pub fn run() {
             git_sync_now,
             vault_sync_settings,
             set_vault_sync,
+            recent_changes,
             open_vault,
             create_vault,
             list_notes,

@@ -106,6 +106,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recents: &[RecentEntry]) -> tauri::
         &[
             &MenuItem::with_id(app, "toggle-view", "Toggle Read / Source", true, Some("CmdOrCtrl+E"))?,
             &MenuItem::with_id(app, "toggle-graph", "Graph View", true, Some("CmdOrCtrl+G"))?,
+            &MenuItem::with_id(app, "toggle-recent", "Recent Changes", true, Some("CmdOrCtrl+Shift+R"))?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "toggle-sidebar", "Toggle Sidebar", true, Some("CmdOrCtrl+B"))?,
             &MenuItem::with_id(app, "toggle-panel", "Toggle Side Panel", true, Some("CmdOrCtrl+\\"))?,

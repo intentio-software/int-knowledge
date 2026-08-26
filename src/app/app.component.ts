@@ -24,6 +24,7 @@ import { CommandPaletteComponent, PaletteMode } from "./components/command-palet
 import { ContextMenuComponent, MenuItem } from "./components/context-menu.component";
 import { ContextPanelComponent } from "./components/context-panel.component";
 import { GraphViewComponent } from "./components/graph-view.component";
+import { Change, RecentChangesComponent } from "./components/recent-changes.component";
 import { MarkdownViewComponent } from "./components/markdown-view.component";
 import { NoteEditorComponent } from "./components/note-editor.component";
 import { NoteTreeComponent, TreeContextEvent } from "./components/note-tree.component";
@@ -67,6 +68,7 @@ import { VaultService } from "./services/vault.service";
     ContextMenuComponent,
     ContextPanelComponent,
     GraphViewComponent,
+    RecentChangesComponent,
     MarkdownViewComponent,
     NoteEditorComponent,
     NoteTreeComponent,
@@ -122,6 +124,8 @@ export class AppComponent implements OnInit, OnDestroy {
   /** Rendered markdown by default; source is the toggle. */
   readonly viewMode = signal<ViewMode>(this.loadViewMode());
   readonly graphOpen = signal(false);
+  readonly recentOpen = signal(false);
+  readonly recentChanges = signal<Change[]>([]);
   readonly graphData = signal<GraphData | null>(null);
   readonly aboutOpen = signal(false);
   readonly appVersion = signal("0.1.0");
@@ -245,6 +249,9 @@ export class AppComponent implements OnInit, OnDestroy {
         break;
       case "toggle-graph":
         await this.toggleGraph();
+        break;
+      case "toggle-recent":
+        await this.toggleRecent();
         break;
       case "toggle-sidebar":
         this.toggleSidebar();
@@ -879,4 +886,29 @@ export class AppComponent implements OnInit, OnDestroy {
       }
     }, 2000);
   }
+  /** Show what has changed lately, reading it fresh each time it is opened. */
+  async toggleRecent(): Promise<void> {
+    const opening = !this.recentOpen();
+    this.recentOpen.set(opening);
+    if (!opening) {
+      return;
+    }
+    this.graphOpen.set(false);
+    const vault = this.vaultService.vault()?.path;
+    if (!vault) {
+      this.recentChanges.set([]);
+      return;
+    }
+    try {
+      this.recentChanges.set(await invoke<Change[]>("recent_changes", { vault, limit: 60 }));
+    } catch {
+      this.recentChanges.set([]);
+    }
+  }
+
+  async openFromRecent(path: string): Promise<void> {
+    this.recentOpen.set(false);
+    await this.openNote(path);
+  }
+
 }

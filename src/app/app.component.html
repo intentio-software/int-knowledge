@@ -114,7 +114,23 @@
     </aside>
 
     <main class="content">
-      @if (graphOpen()) {
+      @if (recentOpen()) {
+        <div class="note-head">
+          <div class="head-title">
+            <h1>Recent changes</h1>
+            <button type="button" class="icon small" title="Back to note" (click)="toggleRecent()">
+              <i class="pi pi-times"></i>
+            </button>
+          </div>
+          <div class="head-meta">
+            <span class="path">what changed in {{ vaultService.vault()?.name }}, and who changed it</span>
+          </div>
+        </div>
+        <app-recent-changes
+          [changes]="recentChanges()"
+          (opened)="openFromRecent($event)"
+        ></app-recent-changes>
+      } @else if (graphOpen()) {
         <div class="note-head">
           <div class="head-title">
             <h1>Graph</h1>

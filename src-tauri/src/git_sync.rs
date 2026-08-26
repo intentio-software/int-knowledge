@@ -211,6 +211,135 @@ pub fn vault_path(vault: &str) -> PathBuf {
     PathBuf::from(vault)
 }
 
+/// One note that changed, and what we know about the change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Change {
+    /// Vault-relative path.
+    pub path: String,
+    /// `added`, `modified`, `deleted` or `renamed`.
+    pub kind: String,
+    /// Who made it. Absent when the vault is not a repository.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// ISO 8601, or the file's modified time when there is no history.
+    pub at: String,
+    /// The commit subject, for context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+/// Recently changed notes, newest first.
+///
+/// From the Git log where there is one — which is what makes "who changed this"
+/// answerable at all — and from file modification times where there is not. The
+/// second is worth having: a vault with no remote still benefits from knowing
+/// what you touched this morning.
+pub fn recent_changes(vault: &Path, limit: usize) -> Vec<Change> {
+    if git(vault, &["rev-parse", "--is-inside-work-tree"]).is_ok() {
+        let from_log = changes_from_log(vault, limit);
+        if !from_log.is_empty() {
+            return from_log;
+        }
+    }
+    changes_from_disk(vault, limit)
+}
+
+fn changes_from_log(vault: &Path, limit: usize) -> Vec<Change> {
+    // A record separator keeps commit headers apart from name-status lines
+    // without guessing at blank lines.
+    let format = "--pretty=format:\x1ecommit\x1f%an\x1f%aI\x1f%s";
+    let Ok(out) = git(
+        vault,
+        &["log", "--name-status", "--no-merges", "-n", "200", format, "--", "*.md"],
+    ) else {
+        return Vec::new();
+    };
+
+    let mut changes = Vec::new();
+    let mut author = String::new();
+    let mut at = String::new();
+    let mut summary = String::new();
+
+    for chunk in out.split('\x1e') {
+        for line in chunk.lines() {
+            if let Some(rest) = line.strip_prefix("commit\x1f") {
+                let mut parts = rest.split('\x1f');
+                author = parts.next().unwrap_or_default().to_string();
+                at = parts.next().unwrap_or_default().to_string();
+                summary = parts.next().unwrap_or_default().to_string();
+                continue;
+            }
+            let mut cols = line.split('\t');
+            let (Some(status), Some(path)) = (cols.next(), cols.last()) else { continue };
+            if !path.ends_with(".md") {
+                continue;
+            }
+            let kind = match status.chars().next() {
+                Some('A') => "added",
+                Some('D') => "deleted",
+                Some('R') => "renamed",
+                _ => "modified",
+            };
+            changes.push(Change {
+                path: path.to_string(),
+                kind: kind.to_string(),
+                author: Some(author.clone()),
+                at: at.clone(),
+                summary: Some(summary.clone()).filter(|s| !s.is_empty()),
+            });
+            if changes.len() >= limit {
+                return changes;
+            }
+        }
+    }
+    changes
+}
+
+fn changes_from_disk(vault: &Path, limit: usize) -> Vec<Change> {
+    fn walk(dir: &Path, out: &mut Vec<(std::time::SystemTime, String)>, root: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            // Dot folders are the app's own business, not the user's notes.
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, out, root);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
+                    let relative = path.strip_prefix(root).unwrap_or(&path);
+                    out.push((modified, relative.to_string_lossy().replace('\\', "/")));
+                }
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    walk(vault, &mut found, vault);
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found
+        .into_iter()
+        .take(limit)
+        .map(|(modified, path)| Change {
+            path,
+            kind: "modified".into(),
+            author: None,
+            at: iso(modified),
+            summary: None,
+        })
+        .collect()
+}
+
+fn iso(at: std::time::SystemTime) -> String {
+    let secs = at.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
+    chrono::DateTime::from_timestamp(secs, 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default()
+}
+
 /// Emitted after every automatic sync so the UI can show where things stand.
 pub const SYNC_EVENT: &str = "vault-sync";
 
