@@ -230,6 +230,8 @@
       </span>
 
       <span class="error" *ngIf="vaultService.error() as error">{{ error }}</span>
+
+      <app-sync-indicator [vault]="vaultService.vault()?.path ?? null"></app-sync-indicator>
     </footer>
   </div>
 

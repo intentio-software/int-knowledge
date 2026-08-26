@@ -29,6 +29,36 @@ pub struct AppState {
     /// When the app last wrote this, in milliseconds since the Unix epoch.
     #[serde(default)]
     pub updated_at: u64,
+    /// Git sync preferences, keyed by absolute vault path.
+    ///
+    /// Kept here rather than inside the vault because it is a preference about
+    /// a folder on this machine, not content to be shared with everyone who
+    /// clones it — the other person may well want a different interval, or
+    /// none at all.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sync: std::collections::BTreeMap<String, VaultSync>,
+}
+
+/// How one vault should keep itself in step with its remote.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultSync {
+    pub enabled: bool,
+    /// How often to sync while the app is open.
+    #[serde(default = "default_interval_seconds")]
+    pub interval_seconds: u64,
+}
+
+fn default_interval_seconds() -> u64 {
+    180
+}
+
+impl Default for VaultSync {
+    fn default() -> Self {
+        // Three minutes: often enough that the other person is not waiting,
+        // rare enough that the history stays readable.
+        VaultSync { enabled: false, interval_seconds: default_interval_seconds() }
+    }
 }
 
 /// Directory holding the shared state.
@@ -93,6 +123,26 @@ pub fn write_active_vault(vault: Option<&Path>, now_millis: u64) -> std::io::Res
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(&state)?;
     fs::write(path, format!("{json}\n"))
+}
+
+/// Read one vault's sync preference, falling back to the default (off).
+pub fn sync_settings(vault: &Path) -> VaultSync {
+    let key = vault.to_string_lossy().to_string();
+    read().and_then(|state| state.sync.get(&key).cloned()).unwrap_or_default()
+}
+
+/// Record how a vault should sync.
+pub fn write_sync_settings(vault: &Path, settings: VaultSync, now_millis: u64) -> std::io::Result<()> {
+    let Some(dir) = state_dir() else {
+        return Ok(());
+    };
+    let mut state = read().unwrap_or_default();
+    state.sync.insert(vault.to_string_lossy().to_string(), settings);
+    state.updated_at = now_millis;
+
+    fs::create_dir_all(&dir)?;
+    let json = serde_json::to_string_pretty(&state)?;
+    fs::write(dir.join("state.json"), format!("{json}\n"))
 }
 
 #[cfg(test)]

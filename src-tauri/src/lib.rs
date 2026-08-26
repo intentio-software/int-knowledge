@@ -655,6 +655,30 @@ mod tests {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// The vault's sync preference, and whether Git can actually do it.
+#[tauri::command]
+fn vault_sync_settings(vault: String) -> int_vault::VaultSync {
+    int_vault::app_state::sync_settings(&git_sync::vault_path(&vault))
+}
+
+/// Turn syncing on or off for a vault, and set how often it runs.
+#[tauri::command]
+fn set_vault_sync(vault: String, enabled: bool, interval_seconds: Option<u64>) -> Result<(), String> {
+    let current = int_vault::app_state::sync_settings(&git_sync::vault_path(&vault));
+    let settings = int_vault::VaultSync {
+        enabled,
+        // Never below a minute: syncing faster than you can finish a sentence
+        // produces a commit history nobody can read.
+        interval_seconds: interval_seconds.unwrap_or(current.interval_seconds).max(60),
+    };
+    int_vault::app_state::write_sync_settings(
+        &git_sync::vault_path(&vault),
+        settings,
+        now_millis(),
+    )
+    .map_err(|err| err.to_string())
+}
+
 /// Whether the open vault is a Git repository, and how it stands with its remote.
 #[tauri::command]
 fn git_sync_status(vault: String) -> git_sync::SyncStatus {
@@ -686,12 +710,15 @@ pub fn run() {
             // Installed here rather than via `Builder::menu` so the menu can be
             // rebuilt later, when the Open Recent list changes.
             menu::install(app.handle())?;
+            git_sync::spawn(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             menu::set_recent_vaults,
             git_sync_status,
             git_sync_now,
+            vault_sync_settings,
+            set_vault_sync,
             open_vault,
             create_vault,
             list_notes,

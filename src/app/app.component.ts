@@ -10,6 +10,7 @@ import {
   signal
 } from "@angular/core";
 import { CommonModule } from "@angular/common";
+import { SyncIndicatorComponent } from "./components/sync-indicator.component";
 import { invoke } from "@tauri-apps/api/core";
 import { UnlistenFn, listen } from "@tauri-apps/api/event";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -70,7 +71,8 @@ import { VaultService } from "./services/vault.service";
     NoteEditorComponent,
     NoteTreeComponent,
     PromptDialogComponent,
-    VaultLauncherComponent
+    VaultLauncherComponent,
+    SyncIndicatorComponent,
   ],
   templateUrl: "./app.component.html",
   styleUrls: ["./app.component.css"]

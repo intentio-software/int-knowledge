@@ -29,7 +29,7 @@ pub mod note;
 pub mod search;
 pub mod vault;
 
-pub use app_state::AppState;
+pub use app_state::{AppState, VaultSync};
 pub use error::{Result, VaultError};
 pub use index::{Backlink, IndexedNote, ResolvedLink, UnresolvedLink, VaultIndex};
 pub use links::{Heading, LinkKind, LinkRef, Scan, TagRef};

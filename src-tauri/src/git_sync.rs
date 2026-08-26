@@ -172,3 +172,35 @@ fn failed(reason: &str) -> SyncOutcome {
 pub fn vault_path(vault: &str) -> PathBuf {
     PathBuf::from(vault)
 }
+
+/// Emitted after every automatic sync so the UI can show where things stand.
+pub const SYNC_EVENT: &str = "vault-sync";
+
+/// Run the enabled vault's sync on its own schedule, for as long as the app is open.
+///
+/// One thread, waking often and doing nothing most of the time. It reads the
+/// settings on every tick rather than caching them, so turning sync off takes
+/// effect immediately instead of after the current interval.
+pub fn spawn<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    std::thread::spawn(move || {
+        let mut last_run = std::time::Instant::now() - std::time::Duration::from_secs(3_600);
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(15));
+
+            let Some(vault) = int_vault::app_state::active_vault() else { continue };
+            let settings = int_vault::app_state::sync_settings(&vault);
+            if !settings.enabled {
+                continue;
+            }
+            if last_run.elapsed().as_secs() < settings.interval_seconds {
+                continue;
+            }
+
+            let outcome = sync(&vault);
+            last_run = std::time::Instant::now();
+            // A blocked sync is reported once and then left alone: retrying a
+            // conflict every three minutes would fill the log and fix nothing.
+            let _ = tauri::Emitter::emit(&app, SYNC_EVENT, &outcome);
+        }
+    });
+}
