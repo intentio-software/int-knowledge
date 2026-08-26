@@ -5,6 +5,7 @@
 //! parsing. The frontend never touches the filesystem directly; it names a vault
 //! root and a note path, and everything is validated here.
 
+pub mod git_sync;
 mod menu;
 
 use std::collections::{HashMap, HashSet};
@@ -654,6 +655,26 @@ mod tests {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Whether the open vault is a Git repository, and how it stands with its remote.
+#[tauri::command]
+fn git_sync_status(vault: String) -> git_sync::SyncStatus {
+    git_sync::status(&git_sync::vault_path(&vault))
+}
+
+/// Commit, pull and push the vault. Returns what happened, including the
+/// reason when it deliberately stopped.
+#[tauri::command]
+async fn git_sync_now(vault: String) -> git_sync::SyncOutcome {
+    // Git can block on the network, so it must not run on the UI thread.
+    tauri::async_runtime::spawn_blocking(move || git_sync::sync(&git_sync::vault_path(&vault)))
+        .await
+        .unwrap_or_else(|err| git_sync::SyncOutcome {
+            changed: false,
+            message: format!("Sync did not run: {err}"),
+            blocked: Some("Sync did not run.".into()),
+        })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
@@ -669,6 +690,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             menu::set_recent_vaults,
+            git_sync_status,
+            git_sync_now,
             open_vault,
             create_vault,
             list_notes,
