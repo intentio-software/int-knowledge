@@ -58,6 +58,25 @@ interface VaultSync {
                 <span *ngIf="s.behind"> · {{ s.behind }} to pull</span>
               </p>
 
+              <label class="row interval" [class.dim]="!settings().enabled">
+                <span>Check for changes every</span>
+                <select
+                  [value]="settings().intervalSeconds"
+                  [disabled]="!settings().enabled"
+                  (change)="setInterval($event)"
+                >
+                  @for (choice of intervals; track choice.seconds) {
+                    <option [value]="choice.seconds">{{ choice.label }}</option>
+                  }
+                </select>
+              </label>
+
+              <p class="behaviour">
+                Your own changes are committed once you have stopped writing for
+                a couple of minutes, so a session becomes one commit rather than
+                a run of them.
+              </p>
+
               @if (blockedReason(); as reason) {
                 <p class="reason">{{ reason }}</p>
               }
@@ -124,6 +143,29 @@ interface VaultSync {
         line-height: 1.5;
         color: var(--accent, #f05f36);
       }
+      .interval {
+        margin-top: 0.6rem;
+        justify-content: space-between;
+        font-size: 0.78rem;
+      }
+      .interval.dim {
+        opacity: 0.5;
+      }
+      .interval select {
+        padding: 0.15rem 0.3rem;
+        border: 1px solid var(--border, #2a3a44);
+        border-radius: 6px;
+        background: var(--surface, #0b141a);
+        color: inherit;
+        font: inherit;
+        font-size: 0.75rem;
+      }
+      .behaviour {
+        margin: 0.5rem 0 0;
+        font-size: 0.7rem;
+        line-height: 1.5;
+        color: var(--ink-faint, #8aa);
+      }
       .now {
         margin-top: 0.6rem;
         padding: 0.25rem 0.6rem;
@@ -154,6 +196,15 @@ export class SyncIndicatorComponent implements OnInit, OnDestroy {
   readonly busy = signal(false);
   /** The last thing that stopped a sync, cleared by the next successful one. */
   readonly lastBlock = signal<string | null>(null);
+
+  /** Deliberately few: the interval is the only one worth varying by person. */
+  readonly intervals = [
+    { seconds: 60, label: "1 minute" },
+    { seconds: 180, label: "3 minutes" },
+    { seconds: 300, label: "5 minutes" },
+    { seconds: 900, label: "15 minutes" },
+    { seconds: 1800, label: "30 minutes" }
+  ];
 
   private path: string | null = null;
   private unlisten: UnlistenFn | null = null;
@@ -209,6 +260,19 @@ export class SyncIndicatorComponent implements OnInit, OnDestroy {
     if (enabled) {
       await this.syncNow();
     }
+  }
+
+  async setInterval(event: Event): Promise<void> {
+    const seconds = Number((event.target as HTMLSelectElement).value);
+    if (!this.path || !Number.isFinite(seconds)) {
+      return;
+    }
+    await invoke("set_vault_sync", {
+      vault: this.path,
+      enabled: this.settings().enabled,
+      intervalSeconds: seconds
+    });
+    this.settings.set({ ...this.settings(), intervalSeconds: seconds });
   }
 
   async syncNow(): Promise<void> {

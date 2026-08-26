@@ -199,5 +199,26 @@ mod tests {
         write_active_vault(Some(&ghost), 5000).unwrap();
         fs::remove_dir_all(&ghost).unwrap();
         assert!(active_vault().is_none(), "a deleted vault must not be reported as active");
+
+        // Sync settings live alongside, keyed per vault, and must survive a
+        // round trip without disturbing the active vault.
+        assert!(!sync_settings(&vault).enabled, "off until asked for");
+        assert_eq!(sync_settings(&vault).interval_seconds, 180, "three minutes by default");
+
+        // Writing a preference must not disturb anything else in the file.
+        let before = read().unwrap();
+        write_sync_settings(&vault, VaultSync { enabled: true, interval_seconds: 900 }, 6000).unwrap();
+        let saved = sync_settings(&vault);
+        assert!(saved.enabled);
+        assert_eq!(saved.interval_seconds, 900);
+
+        let after = read().unwrap();
+        assert_eq!(after.active_vault, before.active_vault, "active vault untouched");
+        assert_eq!(after.recent_vaults, before.recent_vaults, "history untouched");
+
+        // A second vault keeps its own preference.
+        let other = scratch.join("Other");
+        fs::create_dir_all(&other).unwrap();
+        assert!(!sync_settings(&other).enabled, "settings do not leak between vaults");
     }
 }
