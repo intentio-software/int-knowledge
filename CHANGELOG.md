@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/intentio-software/int-knowledge/compare/v1.5.0...v1.6.0) (2026-08-26)
+
+
+### Features
+
+* choose how often a vault checks for changes ([a52d0f2](https://github.com/intentio-software/int-knowledge/commit/a52d0f2d65cf136ed937d7cd08e6abe9b25b568d))
+
 # [1.5.0](https://github.com/intentio-software/int-knowledge/compare/v1.4.0...v1.5.0) (2026-08-26)
 
 
