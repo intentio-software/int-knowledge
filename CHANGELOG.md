@@ -1,3 +1,10 @@
+# [1.7.0](https://github.com/intentio-software/int-knowledge/compare/v1.6.0...v1.7.0) (2026-08-26)
+
+
+### Features
+
+* show what changed lately and who changed it; fix the sync panel ([291430e](https://github.com/intentio-software/int-knowledge/commit/291430e66fbd3839b2c1907193e5cbec6a1f6f13))
+
 # [1.6.0](https://github.com/intentio-software/int-knowledge/compare/v1.5.0...v1.6.0) (2026-08-26)
 
 
