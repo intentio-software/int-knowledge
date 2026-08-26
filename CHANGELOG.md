@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/intentio-software/int-knowledge/compare/v1.3.1...v1.4.0) (2026-08-26)
+
+
+### Features
+
+* keep a vault in sync with its Git remote from inside the app ([8bc649b](https://github.com/intentio-software/int-knowledge/commit/8bc649b18253592908718d0f0211caff85706157))
+
 ## [1.3.1](https://github.com/intentio-software/int-knowledge/compare/v1.3.0...v1.3.1) (2026-08-26)
 
 
