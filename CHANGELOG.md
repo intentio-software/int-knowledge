@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/intentio-software/int-knowledge/compare/v1.2.1...v1.3.0) (2026-08-26)
+
+
+### Features
+
+* teach the vault to sync itself with Git ([3310afb](https://github.com/intentio-software/int-knowledge/commit/3310afbd50e20c3be492c5a1e309820b8ba46c6c))
+
 ## [1.2.1](https://github.com/intentio-software/int-knowledge/compare/v1.2.0...v1.2.1) (2026-07-31)
 
 
