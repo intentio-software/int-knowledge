@@ -8,6 +8,12 @@ fn main() {
         "status: repo={} remote={} branch={:?} dirty={} ahead={} behind={} blocked={:?}",
         status.is_repo, status.has_remote, status.branch, status.dirty, status.ahead, status.behind, status.blocked
     );
-    let outcome = int_knowledge_lib::git_sync::sync(&path);
-    println!("sync  : changed={} blocked={:?}\n        {}", outcome.changed, outcome.blocked.is_some(), outcome.message);
+    // Syncing writes to a real repository and pushes to a real remote, so it
+    // only happens when asked for explicitly. Inspecting must never be a write.
+    if std::env::args().any(|arg| arg == "--sync") {
+        let outcome = int_knowledge_lib::git_sync::sync(&path);
+        println!("sync  : changed={} blocked={:?}\n        {}", outcome.changed, outcome.blocked.is_some(), outcome.message);
+    } else {
+        println!("sync  : not run (pass --sync to actually sync)");
+    }
 }
