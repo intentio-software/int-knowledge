@@ -1,3 +1,10 @@
+# [1.5.0](https://github.com/intentio-software/int-knowledge/compare/v1.4.0...v1.5.0) (2026-08-26)
+
+
+### Features
+
+* commit when the writing stops, not on a timer ([cd76c30](https://github.com/intentio-software/int-knowledge/commit/cd76c30c86b5746782876009f20400ae98893767))
+
 # [1.4.0](https://github.com/intentio-software/int-knowledge/compare/v1.3.1...v1.4.0) (2026-08-26)
 
 
