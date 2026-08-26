@@ -10,7 +10,10 @@ fn main() {
     );
     // Syncing writes to a real repository and pushes to a real remote, so it
     // only happens when asked for explicitly. Inspecting must never be a write.
-    if std::env::args().any(|arg| arg == "--sync") {
+    if std::env::args().any(|arg| arg == "--receive") {
+        let outcome = int_knowledge_lib::git_sync::receive(&path);
+        println!("recv  : changed={} blocked={:?}\n        {}", outcome.changed, outcome.blocked.is_some(), outcome.message);
+    } else if std::env::args().any(|arg| arg == "--sync") {
         let outcome = int_knowledge_lib::git_sync::sync(&path);
         println!("sync  : changed={} blocked={:?}\n        {}", outcome.changed, outcome.blocked.is_some(), outcome.message);
     } else {

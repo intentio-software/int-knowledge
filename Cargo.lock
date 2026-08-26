@@ -1779,6 +1779,7 @@ dependencies = [
 name = "int-knowledge"
 version = "1.4.0"
 dependencies = [
+ "chrono",
  "int-vault",
  "notify",
  "serde",

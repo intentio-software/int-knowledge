@@ -26,4 +26,6 @@ tauri-plugin-process = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 notify = "8.2.0"
+# Local time for sync commit subjects; same pinning as Intentio Tasks.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tauri-plugin-updater = "2.10.1"

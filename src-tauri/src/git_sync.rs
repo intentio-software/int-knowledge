@@ -100,6 +100,20 @@ pub fn status(vault: &Path) -> SyncStatus {
 
 /// Commit local work, bring the remote's in, and push — or stop and say why.
 pub fn sync(vault: &Path) -> SyncOutcome {
+    sync_with(vault, true)
+}
+
+/// Sync without committing: pull the other side's work and push anything
+/// already committed here, but leave the working tree alone.
+///
+/// This is what runs on the interval. Receiving is cheap and wants to be
+/// frequent; committing is what fills the history and wants to wait until the
+/// writing has stopped.
+pub fn receive(vault: &Path) -> SyncOutcome {
+    sync_with(vault, false)
+}
+
+fn sync_with(vault: &Path, commit_local: bool) -> SyncOutcome {
     let before = status(vault);
     if !before.is_repo {
         return blocked("This vault is not a Git repository.");
@@ -118,12 +132,12 @@ pub fn sync(vault: &Path) -> SyncOutcome {
 
     let mut did_something = false;
 
-    if before.dirty {
+    if before.dirty && commit_local {
         if let Err(err) = git(vault, &["add", "-A"]) {
             return failed(&format!("Could not stage changes: {err}"));
         }
-        // Git stamps the commit itself, so the subject does not need a date.
-        if let Err(err) = git(vault, &["commit", "-m", "Vault sync"]) {
+        let (subject, body) = commit_message(vault);
+        if let Err(err) = git(vault, &["commit", "-m", &subject, "-m", &body]) {
             return failed(&format!("Could not commit: {err}"));
         }
         did_something = true;
@@ -161,6 +175,30 @@ pub fn sync(vault: &Path) -> SyncOutcome {
     }
 }
 
+/// The subject and body for one sync commit.
+///
+/// Git records its own timestamp, but `git log --oneline` — the view people
+/// actually read — does not show it, so a run of automatic commits becomes a
+/// wall of identical subjects. The time and the count go in the subject; the
+/// files go in the body, where `git show` will find them.
+fn commit_message(vault: &Path) -> (String, String) {
+    let staged = git(vault, &["diff", "--cached", "--name-only"]).unwrap_or_default();
+    let files: Vec<&str> = staged.lines().filter(|line| !line.trim().is_empty()).collect();
+    let when = chrono::Local::now().format("%Y-%m-%d %H:%M");
+
+    let subject = match files.len() {
+        0 => format!("Vault sync {when}"),
+        1 => format!("Vault sync {when} — {}", short_name(files[0])),
+        n => format!("Vault sync {when} — {n} files"),
+    };
+    (subject, files.join("\n"))
+}
+
+/// A note's name without its folders or extension, for the subject line.
+fn short_name(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).trim_end_matches(".md").to_string()
+}
+
 fn blocked(reason: &str) -> SyncOutcome {
     SyncOutcome { changed: false, message: reason.to_string(), blocked: Some(reason.to_string()) }
 }
@@ -176,6 +214,15 @@ pub fn vault_path(vault: &str) -> PathBuf {
 /// Emitted after every automatic sync so the UI can show where things stand.
 pub const SYNC_EVENT: &str = "vault-sync";
 
+/// How still the vault must be before an automatic commit is made. A pause this
+/// long usually means a thought was finished, which is the right unit for a
+/// commit — and it collapses a whole writing session into one.
+const QUIET_SECONDS: u64 = 120;
+
+/// The longest the vault may stay uncommitted while being edited continuously.
+/// Without this, someone writing all afternoon would sync nothing to anyone.
+const MAX_UNCOMMITTED_SECONDS: u64 = 1_800;
+
 /// Run the enabled vault's sync on its own schedule, for as long as the app is open.
 ///
 /// One thread, waking often and doing nothing most of the time. It reads the
@@ -183,7 +230,11 @@ pub const SYNC_EVENT: &str = "vault-sync";
 /// effect immediately instead of after the current interval.
 pub fn spawn<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     std::thread::spawn(move || {
-        let mut last_run = std::time::Instant::now() - std::time::Duration::from_secs(3_600);
+        let mut last_receive = std::time::Instant::now() - std::time::Duration::from_secs(3_600);
+        let mut fingerprint = String::new();
+        let mut unchanged_since: Option<std::time::Instant> = None;
+        let mut dirty_since: Option<std::time::Instant> = None;
+
         loop {
             std::thread::sleep(std::time::Duration::from_secs(15));
 
@@ -192,14 +243,44 @@ pub fn spawn<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             if !settings.enabled {
                 continue;
             }
-            if last_run.elapsed().as_secs() < settings.interval_seconds {
+
+            // What the working tree looks like right now. Any difference means
+            // the writing is still going on.
+            let current = git(&vault, &["status", "--porcelain"]).unwrap_or_default();
+            if current != fingerprint {
+                fingerprint = current.clone();
+                unchanged_since = Some(std::time::Instant::now());
+            }
+            if current.is_empty() {
+                dirty_since = None;
+            } else if dirty_since.is_none() {
+                dirty_since = Some(std::time::Instant::now());
+            }
+
+            // Commit once the vault has been still for a while, so a long
+            // writing session becomes one commit rather than twenty. The
+            // backstop stops a continuously edited vault from never committing
+            // at all, which would leave the other person seeing nothing.
+            let settled = unchanged_since
+                .map(|at| at.elapsed().as_secs() >= QUIET_SECONDS)
+                .unwrap_or(false);
+            let overdue = dirty_since
+                .map(|at| at.elapsed().as_secs() >= MAX_UNCOMMITTED_SECONDS)
+                .unwrap_or(false);
+            let should_commit = !current.is_empty() && (settled || overdue);
+
+            let due_to_receive = last_receive.elapsed().as_secs() >= settings.interval_seconds;
+            if !should_commit && !due_to_receive {
                 continue;
             }
 
-            let outcome = sync(&vault);
-            last_run = std::time::Instant::now();
+            let outcome = sync_with(&vault, should_commit);
+            last_receive = std::time::Instant::now();
+            if should_commit {
+                dirty_since = None;
+            }
             // A blocked sync is reported once and then left alone: retrying a
-            // conflict every three minutes would fill the log and fix nothing.
+            // conflict every few minutes would fill the log and fix nothing.
             let _ = tauri::Emitter::emit(&app, SYNC_EVENT, &outcome);
         }
     });
