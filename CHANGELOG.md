@@ -1,3 +1,10 @@
+## [1.3.1](https://github.com/intentio-software/int-knowledge/compare/v1.3.0...v1.3.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* make the sync harness read-only unless --sync is passed ([a99f863](https://github.com/intentio-software/int-knowledge/commit/a99f86384ca318244d9051b6a8212f1095fae709))
+
 # [1.3.0](https://github.com/intentio-software/int-knowledge/compare/v1.2.1...v1.3.0) (2026-08-26)
 
 
