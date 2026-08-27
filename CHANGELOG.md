@@ -1,3 +1,10 @@
+# [1.8.0](https://github.com/intentio-software/int-knowledge/compare/v1.7.0...v1.8.0) (2026-08-27)
+
+
+### Features
+
+* reopen a vault where you left it ([6d96bae](https://github.com/intentio-software/int-knowledge/commit/6d96baebbe66fda37df0c66464878e1dcce4b832))
+
 # [1.7.0](https://github.com/intentio-software/int-knowledge/compare/v1.6.0...v1.7.0) (2026-08-26)
 
 

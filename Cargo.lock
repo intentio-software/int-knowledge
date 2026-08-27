@@ -1777,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "int-knowledge"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "chrono",
  "int-vault",
@@ -1794,7 +1794,7 @@ dependencies = [
 
 [[package]]
 name = "int-knowledge-mcp"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "int-vault",
  "serde",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "int-vault"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "serde",
  "serde_json",
