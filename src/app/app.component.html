@@ -94,6 +94,8 @@
       </div>
       <div class="sidebar-body">
         <app-note-tree
+          [folded]="foldedPaths()"
+          (foldedChange)="onFoldedChange($event)"
           [entries]="vaultService.tree()"
           [activePath]="activePath()"
           (noteSelected)="openNote($event)"

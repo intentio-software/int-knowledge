@@ -40,6 +40,10 @@ export type Pane = "sidebar" | "context";
 
 const VIEW_MODE_KEY = "intentio-knowledge:view-mode";
 const PANE_WIDTH_KEY = "intentio-knowledge:pane-widths";
+/// Where you were when you last closed a vault: the note and the folds.
+/// Keyed by vault path, because opening a different vault should not inherit
+/// the shape of the one before it.
+const PLACE_KEY = "intentio-knowledge:place";
 
 /** Defaults match the CSS the layout shipped with: 15rem and 17rem. */
 const DEFAULT_WIDTHS: Record<Pane, number> = { sidebar: 240, context: 272 };
@@ -123,6 +127,8 @@ export class AppComponent implements OnInit, OnDestroy {
 
   /** Rendered markdown by default; source is the toggle. */
   readonly viewMode = signal<ViewMode>(this.loadViewMode());
+  /** Folders currently folded shut, restored per vault on open. */
+  readonly foldedPaths = signal<string[]>([]);
   readonly graphOpen = signal(false);
   readonly recentOpen = signal(false);
   readonly recentChanges = signal<Change[]>([]);
@@ -337,11 +343,67 @@ export class AppComponent implements OnInit, OnDestroy {
     await this.openFirstNote();
   }
 
+  /**
+   * Put the user back where they were, or on the first note the first time.
+   *
+   * A remembered note that has since been deleted or renamed falls back rather
+   * than failing: being returned to the top of the vault is mildly annoying,
+   * an empty pane and an error is worse.
+   */
   private async openFirstNote(): Promise<void> {
-    const first = this.vaultService.notes()[0];
-    if (first) {
-      await this.vaultService.openNote(first.path);
+    const place = this.loadPlace();
+    this.foldedPaths.set(place.folded);
+
+    const notes = this.vaultService.notes();
+    const remembered = place.note && notes.some((note) => note.path === place.note)
+      ? place.note
+      : notes[0]?.path;
+
+    if (remembered) {
+      await this.vaultService.openNote(remembered);
     }
+  }
+
+  /** Where this vault was left. */
+  private loadPlace(): { note: string | null; folded: string[] } {
+    const empty = { note: null, folded: [] as string[] };
+    const vault = this.vaultService.vault()?.path;
+    if (!vault) {
+      return empty;
+    }
+    try {
+      const all = JSON.parse(window.localStorage.getItem(PLACE_KEY) ?? "{}");
+      const place = all?.[vault];
+      return {
+        note: typeof place?.note === "string" ? place.note : null,
+        folded: Array.isArray(place?.folded) ? place.folded.filter((p: unknown) => typeof p === "string") : []
+      };
+    } catch {
+      return empty;
+    }
+  }
+
+  private savePlace(): void {
+    const vault = this.vaultService.vault()?.path;
+    if (!vault) {
+      return;
+    }
+    try {
+      const all = JSON.parse(window.localStorage.getItem(PLACE_KEY) ?? "{}");
+      all[vault] = {
+        note: this.vaultService.activeNote()?.path ?? null,
+        folded: this.foldedPaths()
+      };
+      window.localStorage.setItem(PLACE_KEY, JSON.stringify(all));
+    } catch {
+      // Remembering where you were is a courtesy, not a feature to fail on.
+    }
+  }
+
+  /** A folder was opened or closed. */
+  onFoldedChange(folded: string[]): void {
+    this.foldedPaths.set(folded);
+    this.savePlace();
   }
 
   // -------------------------------------------------------------------------
@@ -352,6 +414,9 @@ export class AppComponent implements OnInit, OnDestroy {
     this.editor?.flushPendingSave();
     await this.vaultService.openNote(path);
     this.closePalette();
+    // Recorded after the open succeeds, so a failed open does not become the
+    // note you are sent back to next time.
+    this.savePlace();
   }
 
   async saveActive(content: string): Promise<void> {

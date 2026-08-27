@@ -183,6 +183,14 @@ export class NoteTreeComponent {
   @Input({ required: true }) entries: TreeEntry[] = [];
   @Input() activePath: string | null = null;
 
+  /** Folders to start folded, restored from wherever the caller kept them. */
+  @Input() set folded(paths: string[]) {
+    this.collapsed.set(new Set(paths ?? []));
+  }
+
+  /** Emitted whenever a fold changes, so the caller can remember it. */
+  @Output() readonly foldedChange = new EventEmitter<string[]>();
+
   @Output() readonly noteSelected = new EventEmitter<string>();
   /** Right-click on a row, or on empty space ("root"). */
   @Output() readonly contextRequested = new EventEmitter<TreeContextEvent>();
@@ -222,6 +230,7 @@ export class NoteTreeComponent {
       next.add(path);
     }
     this.collapsed.set(next);
+    this.foldedChange.emit([...next]);
   }
 
   onContextMenu(event: MouseEvent, kind: TreeContextEvent["kind"], path: string): void {
