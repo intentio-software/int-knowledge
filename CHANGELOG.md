@@ -1,3 +1,10 @@
+# [1.9.0](https://github.com/intentio-software/int-knowledge/compare/v1.8.0...v1.9.0) (2026-09-09)
+
+
+### Features
+
+* print a note, or save it as a PDF ([04adc30](https://github.com/intentio-software/int-knowledge/commit/04adc30c4618afdbad26fba84d8de52eff12846c))
+
 # [1.8.0](https://github.com/intentio-software/int-knowledge/compare/v1.7.0...v1.8.0) (2026-08-27)
 
 
