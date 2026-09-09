@@ -313,3 +313,10 @@
 @if (aboutOpen()) {
   <app-about-dialog [version]="appVersion()" (closed)="aboutOpen.set(false)"></app-about-dialog>
 }
+
+<!-- Hidden on screen; the only thing @media print reveals. -->
+<app-print-sheet
+  [title]="printTitle()"
+  [subtitle]="printSubtitle()"
+  [html]="printHtml()"
+></app-print-sheet>

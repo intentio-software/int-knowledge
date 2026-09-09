@@ -17,6 +17,7 @@ import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { Button } from "primeng/button";
+import { DomSanitizer, SafeHtml } from "@angular/platform-browser";
 import { Toast } from "primeng/toast";
 
 import { AboutDialogComponent } from "./components/about-dialog.component";
@@ -25,6 +26,8 @@ import { ContextMenuComponent, MenuItem } from "./components/context-menu.compon
 import { ContextPanelComponent } from "./components/context-panel.component";
 import { GraphViewComponent } from "./components/graph-view.component";
 import { Change, RecentChangesComponent } from "./components/recent-changes.component";
+import { NoteRenderService } from "./services/note-render.service";
+import { PrintSheetComponent } from "./components/print-sheet.component";
 import { MarkdownViewComponent } from "./components/markdown-view.component";
 import { NoteEditorComponent } from "./components/note-editor.component";
 import { NoteTreeComponent, TreeContextEvent } from "./components/note-tree.component";
@@ -74,6 +77,7 @@ import { VaultService } from "./services/vault.service";
     GraphViewComponent,
     RecentChangesComponent,
     MarkdownViewComponent,
+    PrintSheetComponent,
     NoteEditorComponent,
     NoteTreeComponent,
     PromptDialogComponent,
@@ -85,6 +89,8 @@ import { VaultService } from "./services/vault.service";
 })
 export class AppComponent implements OnInit, OnDestroy {
   readonly vaultService = inject(VaultService);
+  private readonly sanitizer = inject(DomSanitizer);
+  private readonly noteRender = inject(NoteRenderService);
   readonly theme = inject(ThemeService);
   readonly updater = inject(UpdaterService);
 
@@ -134,6 +140,9 @@ export class AppComponent implements OnInit, OnDestroy {
   readonly recentChanges = signal<Change[]>([]);
   readonly graphData = signal<GraphData | null>(null);
   readonly aboutOpen = signal(false);
+  readonly printHtml = signal<SafeHtml | null>(null);
+  readonly printTitle = signal("");
+  readonly printSubtitle = signal("");
   readonly appVersion = signal("0.1.0");
 
   /** True once the native menu is driving actions, so keys are not handled twice. */
@@ -249,6 +258,9 @@ export class AppComponent implements OnInit, OnDestroy {
         break;
       case "delete":
         await this.deleteActive();
+        break;
+      case "print":
+        await this.printNote();
         break;
       case "toggle-view":
         this.toggleViewMode();
@@ -468,6 +480,49 @@ export class AppComponent implements OnInit, OnDestroy {
       }
     }
     return path;
+  }
+
+  /**
+   * Lay the current note out for paper and open the print panel.
+   *
+   * Rendered here rather than reusing whatever is on screen, because the note
+   * may be open in the editor — and printing raw markdown when someone asked
+   * for a PDF of their note is not what they meant.
+   *
+   * The sheet stays in the DOM afterwards. Tearing it down straight away would
+   * race the print panel, which reads the page after this call returns.
+   */
+  private async printNote(): Promise<void> {
+    const note = this.vaultService.activeNote();
+    if (!note) {
+      return;
+    }
+    try {
+      const html = await this.noteRender.render(
+        note,
+        this.vaultService.notes(),
+        this.vaultService.vault()?.path ?? ""
+      );
+      this.printHtml.set(this.sanitizer.bypassSecurityTrustHtml(html));
+      this.printTitle.set(note.title);
+
+      // Where it came from and when, so a page found on a desk can be traced
+      // back to the note it was printed from.
+      const vaultName = this.vaultService.vault()?.name ?? "";
+      const printedOn = new Date().toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "long",
+        day: "numeric"
+      });
+      this.printSubtitle.set([vaultName, note.path, printedOn].filter(Boolean).join(" · "));
+
+      // Let Angular put the sheet in the DOM before WebKit reads the page.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("print_note");
+    } catch (error) {
+      this.vaultService.error.set(`Could not print that note: ${error}`);
+    }
   }
 
   async deleteActive(): Promise<void> {

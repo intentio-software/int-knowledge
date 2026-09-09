@@ -15,10 +15,9 @@ import { CommonModule } from "@angular/common";
 import { DomSanitizer, SafeHtml } from "@angular/platform-browser";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type MarkdownIt from "markdown-it";
 
 import { NoteDetail, NoteMeta } from "../models/vault.models";
-import { MAX_EMBED_DEPTH, createRenderer, renderMarkdown } from "../editor/markdown-renderer";
+import { NoteRenderService } from "../services/note-render.service";
 import { PROPERTY_ICONS, Property, PropertyKind, buildProperties } from "../editor/properties";
 import { VaultService } from "../services/vault.service";
 
@@ -396,7 +395,7 @@ export class MarkdownViewComponent implements OnChanges {
   private readonly sanitizer = inject(DomSanitizer);
   private readonly vaultService = inject(VaultService);
   private readonly changeDetector = inject(ChangeDetectorRef);
-  private readonly renderer: MarkdownIt = createRenderer();
+  private readonly noteRender = inject(NoteRenderService);
   /** Guards against an older render landing after a newer one. */
   private renderToken = 0;
 
@@ -467,112 +466,14 @@ export class MarkdownViewComponent implements OnChanges {
     }
 
     // markdown-it renders synchronously, so every note reachable through an
-    // `![[embed]]` has to be on hand before rendering starts.
-    const { embedded, titles } = await this.collectEmbeds(note);
+    const rendered = await this.noteRender.render(note, this.allNotes, this.vaultRoot);
     if (token !== this.renderToken) {
-      // A newer note was opened while we were fetching; drop this render.
+      // A newer note was opened while we were rendering; drop this one.
       return;
     }
-
-    const rendered = renderMarkdown(this.renderer, note.body, {
-      resolve: (target) => this.resolve(target),
-      assetUrl: (path) => this.assetUrl(path),
-      embedded,
-      titles
-    });
     // The renderer escapes everything it emits and never passes through author
     // HTML, so the output is trusted by construction rather than by sanitizing.
     this.html = this.sanitizer.bypassSecurityTrustHtml(rendered);
     this.changeDetector.markForCheck();
-  }
-
-  /**
-   * Breadth-first walk of `![[embeds]]`, bounded by depth and a visited set.
-   *
-   * Fetching is level by level so that a note embedded from several places is
-   * read once, and a cycle terminates on the first repeat.
-   */
-  private async collectEmbeds(
-    note: NoteDetail
-  ): Promise<{ embedded: Map<string, string>; titles: Map<string, string> }> {
-    const embedded = new Map<string, string>();
-    const titles = new Map<string, string>();
-    const seen = new Set<string>([note.path]);
-    let frontier = this.embedTargets(note.body);
-
-    for (let depth = 0; depth < MAX_EMBED_DEPTH && frontier.length; depth += 1) {
-      const pending = frontier.filter((path) => !seen.has(path));
-      pending.forEach((path) => seen.add(path));
-      if (!pending.length) {
-        break;
-      }
-
-      const loaded = await Promise.all(pending.map((path) => this.vaultService.peekNote(path)));
-      const next: string[] = [];
-      for (const embed of loaded) {
-        if (!embed) {
-          continue;
-        }
-        embedded.set(embed.path, embed.body);
-        titles.set(embed.path, embed.title);
-        next.push(...this.embedTargets(embed.body));
-      }
-      frontier = next;
-    }
-
-    return { embedded, titles };
-  }
-
-  /** Resolved paths of every note-embed in a body, images excluded. */
-  private embedTargets(body: string): string[] {
-    const targets: string[] = [];
-    const pattern = /!\[\[([^\]\n]+)\]\]/g;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(body)) !== null) {
-      const target = match[1].split("|")[0].split("#")[0].trim();
-      if (!target || /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(target)) {
-        continue;
-      }
-      const resolved = this.resolve(target);
-      if (resolved) {
-        targets.push(resolved);
-      }
-    }
-    return targets;
-  }
-
-  /**
-   * Local approximation of the backend's link resolution, used only to decide
-   * how a link is styled. Following a link always re-resolves in Rust.
-   */
-  private resolve(target: string): string | null {
-    const needle = target.toLowerCase().replace(/\.md$/i, "");
-    if (!needle) {
-      return null;
-    }
-    for (const note of this.allNotes) {
-      const path = note.path.toLowerCase();
-      const withoutExt = path.replace(/\.md$/i, "");
-      const stem = withoutExt.slice(withoutExt.lastIndexOf("/") + 1);
-      if (withoutExt === needle || stem === needle || path === needle) {
-        return note.path;
-      }
-      if ((note.aliases ?? []).some((alias) => alias.toLowerCase() === needle)) {
-        return note.path;
-      }
-    }
-    return null;
-  }
-
-  /** Attachments live on disk; the webview needs an asset-protocol URL. */
-  private assetUrl(relative: string): string {
-    if (/^[a-z][a-z0-9+.-]*:/i.test(relative)) {
-      return relative;
-    }
-    if (!this.vaultRoot) {
-      return relative;
-    }
-    const clean = relative.replace(/^\.\//, "");
-    return convertFileSrc(`${this.vaultRoot}/${clean}`);
   }
 }

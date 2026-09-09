@@ -123,3 +123,29 @@ textarea,
   background: var(--ink-faint);
   background-clip: content-box;
 }
+
+/* Printing.
+ *
+ * Component styles are encapsulated, so hiding the app around the print sheet
+ * has to happen here. Everything that is screen furniture — the sidebar, the
+ * titlebar, the status bar, dialogs, toasts — is not paper furniture, and a
+ * printed note that carries them is a screenshot rather than a document.
+ */
+@media print {
+  @page {
+    margin: 18mm 16mm;
+  }
+
+  html,
+  body {
+    height: auto;
+    overflow: visible;
+    background: #fff;
+  }
+
+  /* Only the sheet prints. Anything added to the shell later is hidden by
+     default, which is the safer way round. */
+  app-root > *:not(app-print-sheet) {
+    display: none !important;
+  }
+}

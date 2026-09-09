@@ -75,6 +75,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, recents: &[RecentEntry]) -> tauri::
             &MenuItem::with_id(app, "rename", "Rename or Move Note…", true, None::<&str>)?,
             &MenuItem::with_id(app, "delete", "Delete Note…", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
+            // Cmd+P, because that is the shortcut everyone already has in
+            // their fingers for putting a document on paper or into a PDF.
+            &MenuItem::with_id(app, "print", "Print or Save as PDF…", true, Some("CmdOrCtrl+P"))?,
+            &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, None)?,
         ],
     )?;

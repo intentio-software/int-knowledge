@@ -692,6 +692,20 @@ fn set_vault_sync(vault: String, enabled: bool, interval_seconds: Option<u64>) -
 }
 
 /// Whether the open vault is a Git repository, and how it stands with its remote.
+/// Open the system print panel for the current window.
+///
+/// The webview prints itself, which is why the note is laid out for paper in
+/// the page rather than rendered again here: whatever WebKit shows is exactly
+/// what comes out, and a second renderer would only be a second opinion.
+///
+/// On macOS the panel's PDF menu is how a note becomes a file. That is a
+/// deliberate stop rather than a missing step — the person doing it picks the
+/// paper size, the page range and where it lands.
+#[tauri::command]
+fn print_note(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.print().map_err(|err| err.to_string())
+}
+
 #[tauri::command]
 fn git_sync_status(vault: String) -> git_sync::SyncStatus {
     git_sync::status(&git_sync::vault_path(&vault))
@@ -727,6 +741,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             menu::set_recent_vaults,
+            print_note,
             git_sync_status,
             git_sync_now,
             vault_sync_settings,
