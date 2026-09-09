@@ -11,4 +11,4 @@ MCP server — which this suite also ships.
 - `Intentio/07-Agents and AI/README.md` — how the vault, the MCP servers and
   Claude fit together
 
-Write durable findings back into the vault rather than leaving them in a chat log.
+Write durable findings back into the vault rather than leaving them in a chat log, or as a new file in this repo — the vault is the durable record.
