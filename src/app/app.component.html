@@ -78,6 +78,9 @@
         <button type="button" class="icon" title="Toggle side panel (⌘\)" (click)="toggleContext()">
           <i class="pi pi-list"></i>
         </button>
+        <button type="button" class="icon" title="Keyboard shortcuts" (click)="shortcutsOpen.set(true)">
+          <i class="pi pi-question-circle"></i>
+        </button>
         <button type="button" class="icon" title="About Intentio Knowledge" (click)="aboutOpen.set(true)">
           <i class="pi pi-info-circle"></i>
         </button>
@@ -310,6 +313,13 @@
 }
 
 <!-- Outside the vault check: About is reachable from the launcher too. -->
+@if (shortcutsOpen()) {
+  <app-shortcuts-dialog
+    [groups]="shortcutGroups"
+    (closed)="shortcutsOpen.set(false)"
+  ></app-shortcuts-dialog>
+}
+
 @if (aboutOpen()) {
   <app-about-dialog [version]="appVersion()" (closed)="aboutOpen.set(false)"></app-about-dialog>
 }

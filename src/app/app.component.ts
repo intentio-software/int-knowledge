@@ -20,6 +20,10 @@ import { Button } from "primeng/button";
 import { DomSanitizer, SafeHtml } from "@angular/platform-browser";
 import { Toast } from "primeng/toast";
 
+import {
+  ShortcutGroup,
+  ShortcutsDialogComponent
+} from "./components/shortcuts-dialog.component";
 import { AboutDialogComponent } from "./components/about-dialog.component";
 import { CommandPaletteComponent, PaletteMode } from "./components/command-palette.component";
 import { ContextMenuComponent, MenuItem } from "./components/context-menu.component";
@@ -71,6 +75,7 @@ import { VaultService } from "./services/vault.service";
     Toast,
     Button,
     AboutDialogComponent,
+    ShortcutsDialogComponent,
     CommandPaletteComponent,
     ContextMenuComponent,
     ContextPanelComponent,
@@ -140,6 +145,46 @@ export class AppComponent implements OnInit, OnDestroy {
   readonly recentChanges = signal<Change[]>([]);
   readonly graphData = signal<GraphData | null>(null);
   readonly aboutOpen = signal(false);
+  readonly shortcutsOpen = signal(false);
+
+  /**
+   * What the keyboard does.
+   *
+   * The menu bar already lists the menu items with their keys beside them.
+   * What is written down here is everything else: the things you can only
+   * find out by being told.
+   */
+  readonly shortcutGroups: ShortcutGroup[] = [
+    {
+      title: "Getting about",
+      shortcuts: [
+        { keys: "⌘O", does: "Jump to a note by name" },
+        { keys: "⌘⇧F", does: "Search every note" },
+        { keys: "⌘G", does: "Graph view" },
+        { keys: "⌘⇧R", does: "What changed recently" },
+        { keys: "⌘B", does: "Show or hide the sidebar" },
+        { keys: "⌘\\", does: "Show or hide the side panel" }
+      ]
+    },
+    {
+      title: "Writing",
+      shortcuts: [
+        { keys: "⌘N", does: "New note" },
+        { keys: "⌘S", does: "Save" },
+        { keys: "⌘E", does: "Switch between reading and source" },
+        { keys: "⌘P", does: "Print, or save as PDF" },
+        { keys: "[[", does: "Link to another note" },
+        { keys: "![[", does: "Embed one inside this" }
+      ]
+    },
+    {
+      title: "The vault",
+      shortcuts: [
+        { keys: "⌘⇧O", does: "Open a different vault" },
+        { keys: "Escape", does: "Close whatever is open" }
+      ]
+    }
+  ];
   readonly printHtml = signal<SafeHtml | null>(null);
   readonly printTitle = signal("");
   readonly printSubtitle = signal("");
