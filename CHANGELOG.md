@@ -1,3 +1,10 @@
+# [1.10.0](https://github.com/intentio-software/int-knowledge/compare/v1.9.0...v1.10.0) (2026-10-19)
+
+
+### Features
+
+* a list of what the keyboard does ([ff60750](https://github.com/intentio-software/int-knowledge/commit/ff607509beef293d59bc11fb94925dc3292b0702))
+
 # [1.9.0](https://github.com/intentio-software/int-knowledge/compare/v1.8.0...v1.9.0) (2026-09-09)
 
 
